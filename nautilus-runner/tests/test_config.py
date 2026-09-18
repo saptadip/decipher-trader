@@ -10,12 +10,12 @@ from nautilus_runner.config import (
 
 def test_env_paper_maps_to_testnet():
     env = hyperliquid_env_for("paper")
-    assert env.name == "TESTNET"
+    assert env.name.upper() == "TESTNET"
 
 
 def test_env_live_maps_to_mainnet():
     env = hyperliquid_env_for("live")
-    assert env.name == "MAINNET"
+    assert env.name.upper() == "MAINNET"
 
 
 def test_env_invalid_mode_raises():

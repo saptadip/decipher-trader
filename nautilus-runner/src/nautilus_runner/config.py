@@ -1,42 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from nautilus_trader.adapters.hyperliquid import HyperliquidEnvironment
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-# ---------------------------------------------------------------------------
-# RC5 compatibility shim
-#
-# In nautilus-trader 2.0.0rc5 the Rust-backed HyperliquidEnvironment enum
-# returns lower-case variant names (e.g. "testnet") from its .name property,
-# whereas the plan was authored against rc6 which returns upper-case names.
-# _EnvHandle wraps the real enum and normalises .name to upper-case so that
-# the rest of the codebase can use conventional enum-style comparisons and the
-# test assertions (.name == "TESTNET" / "MAINNET") remain correct.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _EnvHandle:
-    """Thin adapter around HyperliquidEnvironment that exposes an upper-case name."""
-
-    env: HyperliquidEnvironment
-
-    @property
-    def name(self) -> str:  # noqa: D102
-        return self.env.name.upper()
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, _EnvHandle):
-            return self.env == other.env
-        return self.env == other
-
-    def __hash__(self) -> int:
-        return hash(self.env)
 
 
 class RunnerSettings(BaseSettings):
@@ -54,11 +22,11 @@ class RunnerSettings(BaseSettings):
     mainnet_account_id: str | None = Field(default=None, alias="HYPERLIQUID_MAINNET_ACCOUNT_ID")
 
 
-def hyperliquid_env_for(trading_mode: str) -> _EnvHandle:
+def hyperliquid_env_for(trading_mode: str) -> HyperliquidEnvironment:
     if trading_mode == "paper":
-        return _EnvHandle(HyperliquidEnvironment.TESTNET)
+        return HyperliquidEnvironment.TESTNET
     if trading_mode == "live":
-        return _EnvHandle(HyperliquidEnvironment.MAINNET)
+        return HyperliquidEnvironment.MAINNET
     raise ValueError(f"unknown trading_mode {trading_mode!r}; expected 'paper' or 'live'")
 
 
