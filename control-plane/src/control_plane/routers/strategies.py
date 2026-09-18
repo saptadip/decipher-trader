@@ -108,6 +108,8 @@ async def promote_strategy(
     _write_audit(session, actor, "promote", {"strategy_id": strategy.id})
     session.commit()
     session.refresh(strategy)
+    from control_plane.events import broadcaster
+    await broadcaster.broadcast({"type": "promote", "strategy_id": strategy.id, "ts": now.isoformat()})
     return strategy
 
 
@@ -127,6 +129,8 @@ async def demote_strategy(
     _write_audit(session, actor, "demote", {"strategy_id": strategy.id})
     session.commit()
     session.refresh(strategy)
+    from control_plane.events import broadcaster
+    await broadcaster.broadcast({"type": "demote", "strategy_id": strategy.id, "ts": datetime.now(timezone.utc).isoformat()})
     return strategy
 
 

@@ -42,4 +42,6 @@ async def kill_all(
         )
     )
     session.commit()
+    from control_plane.events import broadcaster
+    await broadcaster.broadcast({"type": "kill_all", "ts": now.isoformat(), "demoted": demoted})
     return {"demoted": demoted}
