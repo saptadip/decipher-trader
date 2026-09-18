@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import NullPool, StaticPool
+from sqlalchemy.pool import NullPool
 
 from control_plane.config import get_settings
 
