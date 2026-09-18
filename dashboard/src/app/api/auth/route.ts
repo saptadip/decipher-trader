@@ -7,7 +7,9 @@ export async function POST(req: NextRequest) {
   const hash = process.env.DASHBOARD_OPERATOR_PASSWORD_BCRYPT;
   if (!expectedUser || !hash) return NextResponse.json({ ok: false }, { status: 500 });
   if (username !== expectedUser) return NextResponse.json({ ok: false }, { status: 401 });
-  if (!(await verifyPassword(password, hash))) return NextResponse.json({ ok: false }, { status: 401 });
+  if (!(await verifyPassword(password, hash))) {
+    return NextResponse.json({ ok: false }, { status: 401 });
+  }
 
   const session = await getSession();
   session.operator = expectedUser;
@@ -17,6 +19,6 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE() {
   const session = await getSession();
-  session.destroy();
+  await session.destroy();
   return NextResponse.json({ ok: true });
 }
