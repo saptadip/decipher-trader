@@ -35,3 +35,18 @@ services:
       control-plane:
         condition: service_healthy
     restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+    networks:
+      - decipher
+    env_file:
+      - .env
+    environment:
+      - CONTROL_PLANE_URL=http://control-plane:8000
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports:
+      - "3000:3000"

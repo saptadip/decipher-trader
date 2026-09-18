@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getSession } from "@/lib/session";
 import { redirect } from "next/navigation";
 import KillSwitch from "@/components/KillSwitch";

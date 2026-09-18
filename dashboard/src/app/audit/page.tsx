@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getSession } from "@/lib/session";
 import { controlPlane } from "@/lib/controlPlane";
 import { redirect } from "next/navigation";
