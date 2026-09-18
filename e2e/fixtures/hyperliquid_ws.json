@@ -1,0 +1,4 @@
+[
+  {"channel": "subscriptionResponse", "data": "ok"},
+  {"channel": "trades", "data": {"coin": "BTC", "px": "60000", "sz": "0.01", "time": 1735689600000}}
+]

@@ -24,6 +24,9 @@ coverage/
 .env.local
 !.env.example
 
+# E2E override (written ad-hoc during smoke runs; never committed)
+docker-compose.e2e-override.yml
+
 # OS
 .DS_Store
 Thumbs.db

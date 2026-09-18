@@ -1,0 +1,21 @@
+name: decipher-e2e
+services:
+  mock-hyperliquid:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        WORKDIR /app
+        RUN pip install --no-cache-dir fastapi==0.115.0 uvicorn==0.32.0
+        COPY mock_hyperliquid.py ./mock_hyperliquid.py
+        COPY fixtures ./fixtures
+        CMD ["uvicorn", "mock_hyperliquid:app", "--host", "0.0.0.0", "--port", "9000"]
+    networks:
+      - decipher
+    ports:
+      - "9000:9000"
+
+networks:
+  decipher:
+    external: true
+    name: decipher-trader_decipher

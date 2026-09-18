@@ -50,3 +50,7 @@ docker run --rm -v decipher-trader_decipher-db:/data -v $PWD:/backup alpine tar 
 ```
 
 Restore on any host by untar-ing into the same volume before `docker compose up`.
+
+## End-to-end smoke test
+
+See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills.

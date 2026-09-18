@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     operator_token: str = Field(default="dev-token", alias="OPERATOR_TOKEN")
     db_path: Path = Field(default=Path("/app/data/decipher.sqlite3"), alias="CONTROL_PLANE_DB_PATH")
+    sqlite_wal: bool = Field(default=True, alias="CONTROL_PLANE_SQLITE_WAL")
     paper_forward_min_days: int = Field(default=14, alias="PAPER_FORWARD_MIN_DAYS")
 
 
