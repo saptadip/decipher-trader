@@ -1,0 +1,11 @@
+name: decipher-trader
+
+networks:
+  decipher:
+    driver: bridge
+
+volumes:
+  decipher-db:
+  decipher-cache:
+
+services: {}
