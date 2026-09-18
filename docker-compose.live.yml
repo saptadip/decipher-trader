@@ -1,0 +1,10 @@
+services:
+  control-plane:
+    environment:
+      - TRADING_MODE=live
+  nautilus-runner:
+    environment:
+      - TRADING_MODE=live
+      # Live keys pulled from .env; unset testnet fields so a mistake never routes mainnet flow to testnet URLs.
+      - HYPERLIQUID_TESTNET_PRIVATE_KEY=
+      - HYPERLIQUID_TESTNET_ACCOUNT_ID=

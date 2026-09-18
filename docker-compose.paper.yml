@@ -1,0 +1,10 @@
+services:
+  control-plane:
+    environment:
+      - TRADING_MODE=paper
+  nautilus-runner:
+    environment:
+      - TRADING_MODE=paper
+      # Mainnet credentials deliberately left unset; testnet fields flow in from .env.
+      - HYPERLIQUID_MAINNET_PRIVATE_KEY=
+      - HYPERLIQUID_MAINNET_ACCOUNT_ID=
