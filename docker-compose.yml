@@ -23,3 +23,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 6
+
+  nautilus-runner:
+    build:
+      context: ./nautilus-runner
+    networks:
+      - decipher
+    env_file:
+      - .env
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    restart: unless-stopped
