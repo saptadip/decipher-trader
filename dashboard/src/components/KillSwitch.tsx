@@ -13,7 +13,8 @@ export default function KillSwitch() {
     setBusy(false);
     if (resp.ok) {
       const body = await resp.json();
-      setMsg(`Demoted: ${body.demoted.join(", ") || "none"}`);
+      const demoted = Array.isArray(body.demoted) ? body.demoted : [];
+      setMsg(`Demoted: ${demoted.join(", ") || "none"}`);
       router.refresh();
     } else {
       setMsg(await resp.text());
