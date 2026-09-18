@@ -20,6 +20,8 @@ from nautilus_runner.config import (
     hyperliquid_env_for,
 )
 from nautilus_runner.control_plane_client import ControlPlaneClient
+from nautilus_runner.heartbeat import heartbeat_loop
+from nautilus_runner.kill_listener import kill_listener_loop
 from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
 
 HYPERLIQUID = "HYPERLIQUID"
@@ -94,11 +96,58 @@ def _build_node(settings: RunnerSettings, strategy_rows: list[dict]) -> LiveNode
 
 
 def main() -> None:
+    import signal
+    import threading
+
     settings = RunnerSettings()
     rows = asyncio.run(_fetch_strategies(settings))
     assert_live_startup_safe(rows, settings.trading_mode)
     node = _build_node(settings, rows)
+
+    stop_event = asyncio.Event()
+    ws_url = (
+        settings.control_plane_url.replace("http://", "ws://").replace(
+            "https://", "wss://"
+        )
+        + "/events"
+    )
+
+    def _trigger_kill() -> None:
+        try:
+            node.stop()
+        except Exception:
+            pass
+
+    loop = asyncio.new_event_loop()
+
+    def _background() -> None:
+        asyncio.set_event_loop(loop)
+        client = ControlPlaneClient(settings.control_plane_url, settings.operator_token)
+        loop.run_until_complete(
+            asyncio.gather(
+                heartbeat_loop(
+                    client,
+                    settings.heartbeat_interval_secs,
+                    settings.heartbeat_miss_limit,
+                    stop_event,
+                    _trigger_kill,
+                ),
+                kill_listener_loop(ws_url, _trigger_kill, stop_event),
+            )
+        )
+
+    t = threading.Thread(target=_background, daemon=True)
+    t.start()
+
+    def _handle_sig(_signum, _frame) -> None:
+        loop.call_soon_threadsafe(stop_event.set)
+        node.stop()
+
+    signal.signal(signal.SIGINT, _handle_sig)
+    signal.signal(signal.SIGTERM, _handle_sig)
+
     node.run()
+    loop.call_soon_threadsafe(stop_event.set)
 
 
 if __name__ == "__main__":
