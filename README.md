@@ -5,12 +5,19 @@ Self-hosted crypto trading system built on NautilusTrader and Hyperliquid. Runs 
 ## Prerequisites
 
 - Docker Engine 24+ with Compose v2.
+- A Hyperliquid **API wallet** (not your main wallet). Generate at
+  https://app.hyperliquid-testnet.xyz/API (testnet) or
+  https://app.hyperliquid.xyz/API (mainnet): log in with your funded wallet,
+  click "Generate", copy the API-wallet private key, then sign the on-chain
+  approval. The API wallet is trade-only — it cannot withdraw — so exposing
+  its key in `.env` is safe.
 - A `.env` file (copy from `.env.example`) with:
   - `OPERATOR_TOKEN` — long random string. Every mutating REST call needs it.
   - `DASHBOARD_SESSION_SECRET` — 32+ char random string.
   - `DASHBOARD_OPERATOR_USERNAME` / `DASHBOARD_OPERATOR_PASSWORD_BCRYPT` — dashboard login. Generate the bcrypt hash locally with any bcrypt tool.
-  - `HYPERLIQUID_TESTNET_PRIVATE_KEY`, `HYPERLIQUID_TESTNET_ACCOUNT_ID` for paper mode.
-  - `HYPERLIQUID_MAINNET_PRIVATE_KEY`, `HYPERLIQUID_MAINNET_ACCOUNT_ID` for live mode.
+  - `HYPERLIQUID_TESTNET_PRIVATE_KEY` — API wallet private key (0x-prefixed 64 hex chars).
+  - `HYPERLIQUID_TESTNET_ACCOUNT_ID` — Nautilus-side account label in `HYPERLIQUID-<tag>` format (e.g. `HYPERLIQUID-TESTNET-001`). This is a local identifier, **not** your wallet address — the wallet identity comes from the private key.
+  - `HYPERLIQUID_MAINNET_PRIVATE_KEY`, `HYPERLIQUID_MAINNET_ACCOUNT_ID` — same shape for live mode.
 
 ## Run in paper mode (default)
 
@@ -92,7 +99,7 @@ On success the script prints `CHAOS A OK`, `CHAOS B OK`, and (when run together)
 
 ## End-to-end smoke test
 
-See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills. The smoke now also boots `nautilus-runner`, verifies it is running before the kill event, and asserts it exits cleanly (exit code 0) within 60 seconds of `POST /kill_all`.
+See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills. The smoke now also boots `nautilus-runner`, verifies it is running before the kill event, and asserts it exits within 60 seconds of `POST /kill_all` with an accepted shutdown code (`0`, `133`, `137`, or `143` — see [known quirks](#known-quirks-nautilus-rc5) below).
 
 **This smoke connects to real Hyperliquid testnet.** Accept network flake and retry on transient failures.
 
@@ -122,3 +129,13 @@ docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-c
 ```
 
 On success the script prints `SMOKE OK (with runner)`.
+
+## Known quirks (Nautilus rc5)
+
+- **Runner exit code `133` on `kill_all` / heartbeat-loss shutdown.** `nautilus-trader==2.0.0rc5`'s Rust runtime raises `SIGTRAP` (exit code `133`) when `node.stop()` is invoked from a non-main thread — which is exactly how both `kill_listener_loop` and `heartbeat_loop.on_miss` invoke it. The process still terminates and stops trading as intended; the exit code is a shutdown-path quirk rather than a behaviour defect. The smoke and chaos scripts accept `{0, 133, 137, 143}` for this reason.
+
+  Fix paths for a future release:
+  - Rewire shutdown so the main thread performs `node.stop()` in response to a threading event set by the listener/heartbeat.
+  - Upgrade to a Nautilus release with cleaner cross-thread shutdown once one is available.
+
+- **macOS Docker Desktop bind-mount visibility.** `/tmp` inside the Docker VM is not the same directory as `/tmp` on the macOS host, and Docker Desktop does not follow host-side symlinks when resolving compose bind-mount sources. The smoke and chaos overlays honour `SMOKE_DATA_DIR` (default `/tmp/decipher-e2e`); set `SMOKE_DATA_DIR=$HOME/.decipher-e2e` on macOS so both host Python and the container see the same file.
