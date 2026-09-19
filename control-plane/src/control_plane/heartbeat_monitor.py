@@ -78,7 +78,11 @@ async def _check_once(debounce_marker: datetime | None) -> datetime | None:
 
 async def run() -> None:
     """Background task: poll forever, alerting on stale heartbeats."""
-    log.info("heartbeat monitor started (poll=%ds, threshold=%dx)", _POLL_INTERVAL_SECS, _STALE_HEARTBEAT_MULTIPLIER)
+    log.info(
+        "heartbeat monitor started (poll=%ds, threshold=%dx)",
+        _POLL_INTERVAL_SECS,
+        _STALE_HEARTBEAT_MULTIPLIER,
+    )
     debounce_marker: datetime | None = None
     while True:
         debounce_marker = await _check_once(debounce_marker)
