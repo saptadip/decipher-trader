@@ -94,10 +94,11 @@ def _wait_healthy(timeout_s: int = 30) -> None:
 def main() -> int:
     _wait_healthy()
 
+    strategy_name = f"smoke_toy_{int(time.time())}"
     r = httpx.post(
         f"{BASE}/strategies",
         headers=AUTH,
-        json={"name": "smoke_toy", "code_path": "strategies/toy_momentum/strategy.py", "max_notional": 100, "max_daily_loss": 10, "max_position": 1},
+        json={"name": strategy_name, "code_path": "strategies/toy_momentum/strategy.py", "max_notional": 100, "max_daily_loss": 10, "max_position": 1},
     )
     assert r.status_code == 201, r.text
     sid = r.json()["id"]
