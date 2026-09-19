@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Enum, Float, ForeignKey, Integer, String, Text, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -30,7 +30,10 @@ class Strategy(Base):
     max_notional: Mapped[float] = mapped_column(Float)
     max_daily_loss: Mapped[float] = mapped_column(Float)
     max_position: Mapped[float] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.utcnow())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
     backtest_metrics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     paper_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
