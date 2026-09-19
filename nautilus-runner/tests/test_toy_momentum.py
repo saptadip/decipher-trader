@@ -478,3 +478,150 @@ def test_reconcile_critical_drift_logs_error():
     mock_log.warning.assert_called_once()
     mock_log.error.assert_called_once()
     mock_stop.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Native-metrics tests: SharpeRatio + MaxDrawdown
+# ---------------------------------------------------------------------------
+
+
+def test_on_position_changed_appends_to_pnl_history():
+    """on_position_changed appends realized_pnl to _realized_pnl_history alongside _realized_pnl_today."""
+    strategy = _make_strategy()
+    assert strategy._realized_pnl_history == []
+
+    mock_pnl = MagicMock()
+    mock_pnl.as_double.return_value = 42.5
+    event = MagicMock()
+    event.realized_pnl = mock_pnl
+
+    strategy.on_position_changed(event)
+
+    assert strategy._realized_pnl_today == pytest.approx(42.5)
+    assert strategy._realized_pnl_history == [42.5]
+
+    # Second event appends, not replaces.
+    mock_pnl2 = MagicMock()
+    mock_pnl2.as_double.return_value = -10.0
+    event2 = MagicMock()
+    event2.realized_pnl = mock_pnl2
+    strategy.on_position_changed(event2)
+
+    assert strategy._realized_pnl_today == pytest.approx(32.5)
+    assert strategy._realized_pnl_history == [42.5, -10.0]
+
+
+def test_on_position_changed_no_pnl_does_not_append():
+    """on_position_changed with realized_pnl=None must not append to history."""
+    strategy = _make_strategy()
+    event = MagicMock()
+    event.realized_pnl = None
+
+    strategy.on_position_changed(event)
+
+    assert strategy._realized_pnl_history == []
+    assert strategy._n_trades == 1
+
+
+def test_emit_metric_sharpe_zero_when_history_empty():
+    """_emit_metric posts sharpe=0.0 when _realized_pnl_history is empty."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    strategy._realized_pnl_history = []
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    assert call_kwargs["sharpe"] == pytest.approx(0.0)
+
+
+def test_emit_metric_sharpe_zero_when_history_has_one_entry():
+    """_emit_metric posts sharpe=0.0 when _realized_pnl_history has only 1 entry (< 2)."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    strategy._realized_pnl_history = [100.0]
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    assert call_kwargs["sharpe"] == pytest.approx(0.0)
+
+
+def test_emit_metric_sharpe_real_when_history_has_two_or_more_entries():
+    """_emit_metric posts a non-zero Sharpe when _realized_pnl_history has ≥2 entries."""
+    import nautilus_runner.state as state_mod
+    from strategies.toy_momentum.strategy import _sharpe_from_pnls
+
+    strategy = _make_strategy_with_db_id()
+    # Mix of wins and losses to produce a meaningful Sharpe.
+    history = [10.0, -5.0, 15.0, -3.0, 8.0]
+    strategy._realized_pnl_history = history
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    # Compute expected Sharpe via the same helper used by the strategy.
+    expected = _sharpe_from_pnls(history)
+    assert expected != 0.0, "_sharpe_from_pnls should return non-zero for a 5-entry mixed history"
+    assert call_kwargs["sharpe"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_emit_metric_max_drawdown_real_from_history():
+    """_emit_metric computes cumulative peak-to-trough max_drawdown from realized PnL history."""
+    import nautilus_runner.state as state_mod
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    strategy = _make_strategy_with_db_id()
+    # Sequence: +10, +5, -20, +3 → cumulative 10, 15, -5, -2 → peak=15, trough=-5, drawdown=20.
+    history = [10.0, 5.0, -20.0, 3.0]
+    strategy._realized_pnl_history = history
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    expected = _max_drawdown_from_pnls(history)
+    assert expected == pytest.approx(20.0), "peak-to-trough drawdown should be 20.0"
+    assert call_kwargs["max_drawdown"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_emit_metric_max_drawdown_zero_when_history_empty():
+    """_emit_metric posts max_drawdown=0.0 when _realized_pnl_history is empty."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    strategy._realized_pnl_history = []
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    assert call_kwargs["max_drawdown"] == pytest.approx(0.0)
+
+
+def test_emit_metric_pnl_field_is_today_not_cumulative():
+    """_emit_metric posts today's realized PnL in the pnl field (not cumulative history sum)."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    # History has an old trade (+200) from a prior day; today's PnL is just -30.
+    strategy._realized_pnl_history = [200.0, -30.0]
+    strategy._realized_pnl_today = -30.0
+    mock_metrics = MagicMock()
+
+    with patch.object(state_mod, "metrics", mock_metrics):
+        strategy._emit_metric()
+
+    call_kwargs = mock_metrics.post_metric.call_args.kwargs
+    # pnl field should reflect today only, not the cumulative sum (170.0).
+    assert call_kwargs["pnl"] == pytest.approx(-30.0)

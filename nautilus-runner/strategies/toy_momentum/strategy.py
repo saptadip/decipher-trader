@@ -5,11 +5,56 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+import statistics
+
 from nautilus_trader.common import TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Quantity
 from nautilus_trader.model import PositionChanged
 from nautilus_trader.trading import Strategy
+
+
+def _sharpe_from_pnls(realized_pnls: list[float]) -> float:
+    """Compute per-trade Sharpe ratio from a realized PnL history.
+
+    ``nautilus_trader.analysis.SharpeRatio.calculate_from_realized_pnls`` returns
+    ``None`` in rc5 (the pnl path is not yet implemented in the Rust port), so we
+    implement the formula directly: mean(pnl) / std(pnl).
+
+    Returns 0.0 when fewer than two data points are available (std dev undefined).
+    """
+    if len(realized_pnls) < 2:
+        return 0.0
+    mean = statistics.mean(realized_pnls)
+    stdev = statistics.stdev(realized_pnls)
+    if stdev == 0.0:
+        return 0.0
+    return mean / stdev
+
+
+def _max_drawdown_from_pnls(realized_pnls: list[float]) -> float:
+    """Compute cumulative peak-to-trough drawdown from a realized PnL history.
+
+    ``nautilus_trader.analysis.MaxDrawdown.calculate_from_realized_pnls`` returns
+    ``None`` in rc5 (the pnl path is not yet implemented in the Rust port), so we
+    implement the formula directly: tracks the running cumulative PnL curve and
+    returns the maximum observed drop from a peak as a non-negative value.
+
+    Returns 0.0 when the history is empty.
+    """
+    if not realized_pnls:
+        return 0.0
+    peak = 0.0
+    max_dd = 0.0
+    cumulative = 0.0
+    for pnl in realized_pnls:
+        cumulative += pnl
+        if cumulative > peak:
+            peak = cumulative
+        dd = peak - cumulative  # positive: loss from the running peak
+        if dd > max_dd:
+            max_dd = dd
+    return max_dd
 
 
 def would_breach_position_cap(
@@ -71,6 +116,7 @@ class ToyMomentum(Strategy):
         # Metrics
         self._bars_since_metric: int = 0
         self._n_trades: int = 0
+        self._realized_pnl_history: list[float] = []
 
     def on_start(self) -> None:
         self.subscribe_bars(self._config.bar_type)
@@ -209,7 +255,9 @@ class ToyMomentum(Strategy):
 
     def on_position_changed(self, event: PositionChanged) -> None:
         if event.realized_pnl is not None:
-            self._realized_pnl_today += event.realized_pnl.as_double()
+            pnl_value = event.realized_pnl.as_double()
+            self._realized_pnl_today += pnl_value
+            self._realized_pnl_history.append(pnl_value)
         self._n_trades += 1
 
     def _emit_metric(self) -> None:
@@ -218,12 +266,14 @@ class ToyMomentum(Strategy):
         if state.metrics is None or self._config.strategy_db_id is None:
             return
 
-        max_drawdown = abs(min(self._realized_pnl_today, 0.0))
+        sharpe = _sharpe_from_pnls(self._realized_pnl_history)
+        max_drawdown = _max_drawdown_from_pnls(self._realized_pnl_history)
+
         state.metrics.post_metric(
             strategy_id=self._config.strategy_db_id,
             ts=datetime.now(timezone.utc),
             pnl=self._realized_pnl_today,
-            sharpe=0.0,
+            sharpe=sharpe,
             max_drawdown=max_drawdown,
             n_trades=self._n_trades,
         )
