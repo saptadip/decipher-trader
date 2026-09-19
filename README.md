@@ -51,6 +51,40 @@ docker run --rm -v decipher-trader_decipher-db:/data -v $PWD:/backup alpine tar 
 
 Restore on any host by untar-ing into the same volume before `docker compose up`.
 
+## Chaos tests
+
+Two shallow chaos scenarios that test runner and control-plane failure paths against real Hyperliquid testnet. No production code changes are needed — these tests verify existing behavior.
+
+**Scenario A (`kill_runner`)**: sends `docker kill` (SIGKILL) to the runner container, asserts it exits with code 137, confirms the control-plane is still healthy, and checks that no audit rows were lost.
+
+**Scenario B (`kill_control_plane`)**: stops the control-plane container and asserts the runner self-terminates cleanly (exit code 0) within ~10 seconds via the heartbeat-miss path. The chaos overlay sets `HEARTBEAT_INTERVAL_SECS=2` and `HEARTBEAT_MISS_LIMIT=2` so the runner fires `on_miss` (→ `node.stop()`) after ~4-6 s of control-plane absence instead of the default 60+ s.
+
+### Prerequisites (same as smoke)
+
+- `.env` populated with at minimum:
+  - `OPERATOR_TOKEN` — long random string.
+  - `HYPERLIQUID_TESTNET_PRIVATE_KEY` — real Hyperliquid testnet private key.
+  - `HYPERLIQUID_TESTNET_ACCOUNT_ID` — your testnet account ID.
+- `httpx` installed in the Python environment running `chaos.py`.
+
+These tests connect to real Hyperliquid testnet and are local-only, single-user development tests — they are not run in CI.
+
+### How to run chaos.py
+
+```bash
+# Scenario A
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d
+OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) python e2e/chaos.py A
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml down
+
+# Scenario B (fresh stack)
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d
+OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) python e2e/chaos.py B
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml down
+```
+
+On success the script prints `CHAOS A OK`, `CHAOS B OK`, and (when run together) `CHAOS OK`.
+
 ## End-to-end smoke test
 
 See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills. The smoke now also boots `nautilus-runner`, verifies it is running before the kill event, and asserts it exits cleanly (exit code 0) within 60 seconds of `POST /kill_all`.

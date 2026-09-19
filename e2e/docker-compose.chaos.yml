@@ -1,0 +1,20 @@
+services:
+  control-plane:
+    environment:
+      - CONTROL_PLANE_DB_PATH=/data/decipher.sqlite3
+      - CONTROL_PLANE_SQLITE_WAL=false
+    ports:
+      - "8000:8000"
+    volumes:
+      - /tmp/decipher-e2e:/data
+
+  nautilus-runner:
+    # Override base restart policy so exits stay visible to docker compose ps.
+    restart: "no"
+    environment:
+      # Speed up chaos B: control-plane loss triggers kill in ~4-6 s instead of 60+ s.
+      - HEARTBEAT_INTERVAL_SECS=2
+      - HEARTBEAT_MISS_LIMIT=2
+    depends_on:
+      control-plane:
+        condition: service_healthy
