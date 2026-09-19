@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from control_plane import telegram
 from control_plane.auth import require_operator
 from control_plane.db import get_session
 from control_plane.models import AuditEntry, Strategy, StrategyStatus
@@ -44,4 +45,6 @@ async def kill_all(
     session.commit()
     from control_plane.events import broadcaster
     await broadcaster.broadcast({"type": "kill_all", "ts": now.isoformat(), "demoted": demoted})
+    ids = ", ".join(str(i) for i in demoted) if demoted else "none"
+    telegram.send(f"🚨 KILL ALL — demoted: {ids}")
     return {"demoted": demoted}

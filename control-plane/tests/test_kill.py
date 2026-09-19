@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -35,7 +37,8 @@ def test_kill_all_flips_only_live(env):
         s.add(Strategy(name="c", code_path="c", status=StrategyStatus.paper, capital_weight=1, max_notional=1, max_daily_loss=1, max_position=1))
         s.commit()
 
-    resp = client.post("/kill_all", headers=AUTH)
+    with patch("control_plane.routers.kill.telegram.send") as mock_send:
+        resp = client.post("/kill_all", headers=AUTH)
     assert resp.status_code == 200
     assert set(resp.json()["demoted"]) == {1, 2}
 
@@ -48,3 +51,10 @@ def test_kill_all_flips_only_live(env):
         actions = [a.action for a in s.scalars(select(AuditEntry)).all()]
         assert actions.count("demote") == 2
         assert actions.count("kill_all") == 1
+
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "KILL ALL" in msg
+    # Both demoted strategy IDs appear in the message
+    assert "1" in msg
+    assert "2" in msg
