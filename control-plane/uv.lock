@@ -107,6 +107,7 @@ dependencies = [
     { name = "alembic" },
     { name = "bcrypt" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
@@ -116,7 +117,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -127,7 +127,7 @@ requires-dist = [
     { name = "alembic", specifier = "==1.13.3" },
     { name = "bcrypt", specifier = "==4.2.0" },
     { name = "fastapi", specifier = "==0.115.0" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = "==0.27.2" },
+    { name = "httpx", specifier = "==0.27.2" },
     { name = "pydantic", specifier = "==2.9.2" },
     { name = "pydantic-settings", specifier = "==2.5.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.3.3" },
