@@ -28,6 +28,17 @@ async def list_strategies(
     return list(session.scalars(stmt).all())
 
 
+@router.get("/{strategy_id}", response_model=StrategyOut)
+async def get_strategy(
+    strategy_id: int,
+    session: Session = Depends(get_session),
+) -> Strategy:
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    return strategy
+
+
 @router.post("", response_model=StrategyOut, status_code=status.HTTP_201_CREATED)
 async def create_strategy(
     payload: StrategyCreate,

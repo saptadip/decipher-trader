@@ -13,19 +13,18 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
   const { id } = await params;
 
   const [sResp, mResp] = await Promise.all([
-    controlPlane.get(`/strategies?status=draft,backtest,paper,live,retired`),
+    controlPlane.get(`/strategies/${id}`),
     controlPlane.get(`/metrics/${id}`),
   ]);
-  const rows = sResp.ok
-    ? ((await sResp.json()) as Array<{
+  const row = sResp.ok
+    ? ((await sResp.json()) as {
         id: number;
         name: string;
         status: string;
         paper_started_at: string | null;
         promoted_at: string | null;
-      }>)
-    : [];
-  const row = rows.find((r) => r.id === Number(id));
+      })
+    : null;
   const metrics = mResp.ok ? ((await mResp.json()) as Array<{ pnl: number }>) : [];
 
   if (!row) return <main style={{ padding: 24 }}>Not found.</main>;
