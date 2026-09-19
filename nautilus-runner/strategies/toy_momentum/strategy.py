@@ -298,3 +298,25 @@ class ToyMomentum(Strategy):
             self.clock.cancel_timer(f"reconciler-{self.id}")
         except Exception:
             pass
+        # Flatten before shutdown: cancel any outstanding orders and close open
+        # positions on our instrument. Nautilus routes these as market orders to
+        # the venue. Best-effort — a network failure here must not prevent stop.
+        try:
+            self.cancel_all_orders(self._config.instrument_id)
+        except Exception:
+            self.log.warning("cancel_all_orders failed during on_stop")
+        try:
+            self.close_all_positions(self._config.instrument_id)
+        except Exception:
+            self.log.warning("close_all_positions failed during on_stop")
+        # Audit the flatten so the operator sees it in the log alongside kill_all.
+        from nautilus_runner import state
+        if state.audit_writer and self._config.strategy_db_id is not None:
+            state.audit_writer.post(
+                actor="runner",
+                action="flatten_on_stop",
+                payload={
+                    "strategy_id": self._config.strategy_db_id,
+                    "instrument": str(self._config.instrument_id),
+                },
+            )
