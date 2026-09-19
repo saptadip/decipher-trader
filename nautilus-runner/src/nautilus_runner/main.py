@@ -13,6 +13,7 @@ from nautilus_trader.common import Environment
 from nautilus_trader.live import LiveNode, LiveRiskEngineConfig
 from nautilus_trader.model import AccountId, BarType, InstrumentId, StrategyId, TraderId
 
+from nautilus_runner import state
 from nautilus_runner.config import (
     RunnerSettings,
     assert_live_startup_safe,
@@ -22,6 +23,7 @@ from nautilus_runner.config import (
 from nautilus_runner.control_plane_client import ControlPlaneClient
 from nautilus_runner.heartbeat import heartbeat_loop
 from nautilus_runner.kill_listener import kill_listener_loop
+from nautilus_runner.state import MetricsWriter
 from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
 
 HYPERLIQUID = "HYPERLIQUID"
@@ -89,6 +91,7 @@ def _build_node(settings: RunnerSettings, strategy_rows: list[dict]) -> LiveNode
             max_daily_loss=caps["max_daily_loss"],
             max_position=caps["max_position"],
             strategy_id=StrategyId.from_str(f"DECIPHER-{row['id']:04d}"),
+            strategy_db_id=row["id"],
         )
         node.add_strategy(ToyMomentum(cfg))
 
@@ -100,6 +103,7 @@ def main() -> None:
     import threading
 
     settings = RunnerSettings()
+    state.metrics = MetricsWriter(settings.control_plane_url, settings.operator_token)
     rows = asyncio.run(_fetch_strategies(settings))
     assert_live_startup_safe(rows, settings.trading_mode)
     node = _build_node(settings, rows)
