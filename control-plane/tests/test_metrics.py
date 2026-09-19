@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -107,17 +108,28 @@ def test_metric_auto_demotes_live_on_drawdown_breach(env):
             )
         )
         assert len(audit_rows) == 1
-        import json
         payload = json.loads(audit_rows[0].payload_json)
         assert payload["strategy_id"] == sid
         assert payload["max_drawdown"] == 150.0
         assert payload["max_daily_loss"] == 100.0
+        # I1: audit payload must carry metric_id so the audit row is joinable to the
+        # snapshot that triggered the demote. If future refactor drops this field the
+        # audit-to-metric link is lost silently.
+        assert "metric_id" in payload
+        assert isinstance(payload["metric_id"], int)
 
-    # Telegram called once with expected message fragments
+    # Telegram called once with the full prescribed message format.
+    # I2: assertions cover the design contract — ⚠️ prefix, "Auto-demoted", strategy id,
+    # drawdown value, ≥ character, and max_daily_loss value. A silent reformat that drops
+    # any of these must fail this test.
     mock_tg.assert_called_once()
     msg = mock_tg.call_args[0][0]
+    assert "⚠️" in msg
     assert "Auto-demoted" in msg
     assert str(sid) in msg
+    assert "150.0" in msg
+    assert "≥" in msg
+    assert "100.0" in msg
 
     # Broadcaster called once with kill_all type
     mock_bc.assert_called_once()
