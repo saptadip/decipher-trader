@@ -157,7 +157,6 @@ def test_notional_cap_blocks_over_size():
     mock_submit_order = MagicMock()
 
     # BTC-like mark price: $100,000. Buying 0.01 BTC → notional $1,000 > max_notional $500.
-    strategy._last_close = 100_000.0
     strategy._config = ToyMomentumConfig(
         instrument_id=InstrumentId.from_str("BTC-USD.HYPERLIQUID"),
         bar_type=BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL"),
@@ -241,8 +240,43 @@ def test_daily_loss_circuit_allows_flatten():
         ), "submit_order MUST be called for a flattening order even when daily loss cap is breached"
 
 
+def test_daily_loss_circuit_blocks_open_from_flat():
+    """Daily loss cap must block opening a new position from flat during a losing day."""
+    strategy = _make_strategy(trade_size=Decimal("0.001"), max_position=10.0)
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    strategy._realized_pnl_today = -100.0
+    strategy._config = ToyMomentumConfig(
+        instrument_id=InstrumentId.from_str("BTC-USD.HYPERLIQUID"),
+        bar_type=BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL"),
+        trade_size=Decimal("0.001"),
+        max_notional=1_000_000.0,
+        max_daily_loss=100.0,
+        max_position=10.0,
+    )
+    strategy._signed_position = 0.0  # flat — a BUY here opens a new long
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        strategy._submit_capped(OrderSide.BUY, 0.001)
+        assert (
+            mock_submit_order.call_count == 0
+        ), "submit_order must NOT be called when opening from flat during a stopped-out day"
+        mock_log.warning.assert_called()
+
+
 def test_day_boundary_resets_pnl():
-    """on_bar resets _realized_pnl_today when the UTC date advances."""
+    """on_bar resets _realized_pnl_today when the UTC date advances.
+
+    Mocks datetime.now so the test is deterministic and independent of the system clock —
+    verifies the reset logic actually runs on a date change (not that "today != 2020").
+    """
     strategy = _make_strategy()
     mock_log = MagicMock()
     mock_order_factory = MagicMock()
@@ -259,10 +293,15 @@ def test_day_boundary_resets_pnl():
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "order_factory", mock_order_factory),
         patch.object(ToyMomentum, "submit_order", mock_submit_order),
+        patch("strategies.toy_momentum.strategy.datetime") as mock_dt,
     ):
+        # Force datetime.now(timezone.utc).date() to return a different date than seeded.
+        mock_dt.now.return_value.date.return_value = date(2020, 1, 2)
         strategy.on_bar(bar)
 
-    # After on_bar runs, the date is today (not 2020-01-01), so reset must have fired.
     assert (
         strategy._realized_pnl_today == 0.0
     ), "_realized_pnl_today must be reset to 0.0 on a UTC day boundary"
+    assert (
+        strategy._last_reset_utc_date == date(2020, 1, 2)
+    ), "_last_reset_utc_date must advance to the new date after reset"
