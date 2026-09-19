@@ -16,7 +16,21 @@ async def kill_listener_loop(
         try:
             async with websockets.connect(control_plane_ws_url) as ws:
                 while not stop_event.is_set():
-                    msg = await ws.recv()
+                    recv_task = asyncio.create_task(ws.recv())
+                    stop_task = asyncio.create_task(stop_event.wait())
+                    done, pending = await asyncio.wait(
+                        {recv_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    if stop_task in done:
+                        return
+                    msg = recv_task.result()
                     try:
                         data = json.loads(msg)
                     except Exception:
