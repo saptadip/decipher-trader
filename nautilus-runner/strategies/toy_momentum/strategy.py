@@ -21,7 +21,13 @@ def _sharpe_from_pnls(realized_pnls: list[float]) -> float:
     ``None`` in rc5 (the pnl path is not yet implemented in the Rust port), so we
     implement the formula directly: mean(pnl) / std(pnl).
 
-    Returns 0.0 when fewer than two data points are available (std dev undefined).
+    Returns 0.0 when fewer than two data points are available (std dev undefined)
+    or when stdev is exactly 0.0 (all trades identical PnL). The exact ``== 0.0``
+    check is intentional; near-equal-float PnLs from floating-point arithmetic
+    are out of scope for this MVP (real trades never produce bit-identical values).
+
+    TODO: replace with nautilus_trader.analysis.SharpeRatio.calculate_from_realized_pnls
+    when the rc5 Rust path is implemented upstream.
     """
     if len(realized_pnls) < 2:
         return 0.0
@@ -40,7 +46,11 @@ def _max_drawdown_from_pnls(realized_pnls: list[float]) -> float:
     implement the formula directly: tracks the running cumulative PnL curve and
     returns the maximum observed drop from a peak as a non-negative value.
 
-    Returns 0.0 when the history is empty.
+    Initial peak = 0.0 so a strategy that starts with a losing trade correctly
+    reports a positive drawdown from zero. Returns 0.0 when history is empty.
+
+    TODO: replace with nautilus_trader.analysis.MaxDrawdown.calculate_from_realized_pnls
+    when the rc5 Rust path is implemented upstream.
     """
     if not realized_pnls:
         return 0.0
@@ -116,6 +126,9 @@ class ToyMomentum(Strategy):
         # Metrics
         self._bars_since_metric: int = 0
         self._n_trades: int = 0
+        # Unbounded MVP: session-scoped realized-PnL history feeds sharpe + max_drawdown
+        # computation. At real live-trading frequency (hundreds of trades/day) the O(n)
+        # per-emission cost becomes non-trivial; prune to last K entries in Phase 2.
         self._realized_pnl_history: list[float] = []
 
     def on_start(self) -> None:

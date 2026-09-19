@@ -554,12 +554,15 @@ def test_emit_metric_sharpe_zero_when_history_has_one_entry():
 
 
 def test_emit_metric_sharpe_real_when_history_has_two_or_more_entries():
-    """_emit_metric posts a non-zero Sharpe when _realized_pnl_history has ≥2 entries."""
+    """_emit_metric posts a non-zero Sharpe pinned to a hand-computed value."""
     import nautilus_runner.state as state_mod
-    from strategies.toy_momentum.strategy import _sharpe_from_pnls
 
     strategy = _make_strategy_with_db_id()
-    # Mix of wins and losses to produce a meaningful Sharpe.
+    # Mix of wins and losses producing a meaningful Sharpe.
+    # mean = (10 - 5 + 15 - 3 + 8) / 5 = 5.0
+    # variance (sample, N-1) = sum((x - 5)^2) / 4 = (25 + 100 + 100 + 64 + 9) / 4 = 74.5
+    # stdev = sqrt(74.5) ≈ 8.6313
+    # sharpe = 5.0 / 8.6313 ≈ 0.5793
     history = [10.0, -5.0, 15.0, -3.0, 8.0]
     strategy._realized_pnl_history = history
     mock_metrics = MagicMock()
@@ -568,16 +571,12 @@ def test_emit_metric_sharpe_real_when_history_has_two_or_more_entries():
         strategy._emit_metric()
 
     call_kwargs = mock_metrics.post_metric.call_args.kwargs
-    # Compute expected Sharpe via the same helper used by the strategy.
-    expected = _sharpe_from_pnls(history)
-    assert expected != 0.0, "_sharpe_from_pnls should return non-zero for a 5-entry mixed history"
-    assert call_kwargs["sharpe"] == pytest.approx(expected, rel=1e-6)
+    assert call_kwargs["sharpe"] == pytest.approx(0.5793, rel=1e-3)
 
 
 def test_emit_metric_max_drawdown_real_from_history():
     """_emit_metric computes cumulative peak-to-trough max_drawdown from realized PnL history."""
     import nautilus_runner.state as state_mod
-    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
 
     strategy = _make_strategy_with_db_id()
     # Sequence: +10, +5, -20, +3 → cumulative 10, 15, -5, -2 → peak=15, trough=-5, drawdown=20.
@@ -589,9 +588,7 @@ def test_emit_metric_max_drawdown_real_from_history():
         strategy._emit_metric()
 
     call_kwargs = mock_metrics.post_metric.call_args.kwargs
-    expected = _max_drawdown_from_pnls(history)
-    assert expected == pytest.approx(20.0), "peak-to-trough drawdown should be 20.0"
-    assert call_kwargs["max_drawdown"] == pytest.approx(expected, rel=1e-6)
+    assert call_kwargs["max_drawdown"] == pytest.approx(20.0)
 
 
 def test_emit_metric_max_drawdown_zero_when_history_empty():
@@ -625,3 +622,70 @@ def test_emit_metric_pnl_field_is_today_not_cumulative():
     call_kwargs = mock_metrics.post_metric.call_args.kwargs
     # pnl field should reflect today only, not the cumulative sum (170.0).
     assert call_kwargs["pnl"] == pytest.approx(-30.0)
+
+
+# --- Direct unit tests for the manual math helpers ---
+# These pin the formulas against hand-computed answers so a future refactor (e.g.,
+# swapping in nautilus_trader.analysis.SharpeRatio once rc5 lands the Rust path)
+# cannot silently change the numeric contract without breaking a test.
+
+
+def test_sharpe_from_pnls_zero_when_all_entries_identical():
+    """Identical PnLs → stdev exactly 0.0 → Sharpe 0.0 (guarded division)."""
+    from strategies.toy_momentum.strategy import _sharpe_from_pnls
+
+    assert _sharpe_from_pnls([5.0, 5.0]) == 0.0
+    assert _sharpe_from_pnls([-2.5, -2.5, -2.5]) == 0.0
+
+
+def test_sharpe_from_pnls_empty_and_single_entry_return_zero():
+    """Sharpe undefined without at least two data points."""
+    from strategies.toy_momentum.strategy import _sharpe_from_pnls
+
+    assert _sharpe_from_pnls([]) == 0.0
+    assert _sharpe_from_pnls([42.0]) == 0.0
+
+
+def test_sharpe_from_pnls_matches_hand_computed_value():
+    """Hand-computed Sharpe for a known-good sequence."""
+    from strategies.toy_momentum.strategy import _sharpe_from_pnls
+
+    # mean = 5.0; sample stdev ≈ 8.6313; sharpe = 5.0 / 8.6313 ≈ 0.5793.
+    assert _sharpe_from_pnls([10.0, -5.0, 15.0, -3.0, 8.0]) == pytest.approx(0.5793, rel=1e-3)
+
+
+def test_max_drawdown_from_pnls_single_entry_negative_reports_loss_from_zero():
+    """A single negative first trade starts drawn down from initial peak=0.0."""
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    # peak=0.0, cumulative=-5.0 → dd=5.0.
+    assert _max_drawdown_from_pnls([-5.0]) == pytest.approx(5.0)
+
+
+def test_max_drawdown_from_pnls_single_entry_positive_is_zero():
+    """A single positive first trade is a new peak — no drawdown."""
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    assert _max_drawdown_from_pnls([10.0]) == 0.0
+
+
+def test_max_drawdown_from_pnls_empty_is_zero():
+    """Empty history has no drawdown."""
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    assert _max_drawdown_from_pnls([]) == 0.0
+
+
+def test_max_drawdown_from_pnls_monotonic_up_is_zero():
+    """A monotonically increasing equity curve has zero drawdown."""
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    assert _max_drawdown_from_pnls([1.0, 2.0, 3.0, 4.0]) == 0.0
+
+
+def test_max_drawdown_from_pnls_matches_hand_computed_value():
+    """Hand-computed peak-to-trough for a known-good sequence."""
+    from strategies.toy_momentum.strategy import _max_drawdown_from_pnls
+
+    # Cumulative: 10, 15, -5, -2 → peak=15, trough=-5, drawdown=20.
+    assert _max_drawdown_from_pnls([10.0, 5.0, -20.0, 3.0]) == pytest.approx(20.0)
