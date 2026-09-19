@@ -2,6 +2,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Price, Quantity
 
 from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
@@ -27,9 +28,9 @@ def _make_bar(bar_type: BarType, price: float, ts: int) -> Bar:
     return Bar(bar_type, p, p, p, p, q, ts, ts)
 
 
-def _feed_bars(strategy: ToyMomentum, mock_submit: MagicMock, prices: list[float]) -> None:
+def _feed_bars(strategy: ToyMomentum, prices: list[float]) -> None:
     """Feed synthetic bars through strategy.on_bar with runtime methods mocked."""
-    bar_type = BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL")
+    bar_type = strategy._config.bar_type
     for ts, price in enumerate(prices):
         bar = _make_bar(bar_type, price, ts)
         strategy.on_bar(bar)
@@ -64,27 +65,29 @@ def test_toy_momentum_backtest_no_crash():
         patch.object(ToyMomentum, "submit_order", mock_submit_order),
     ):
         # Assert 1: no exception across the full 50-bar cycle
-        _feed_bars(strategy, mock_submit_order, prices)
+        _feed_bars(strategy, prices)
 
-        # Assert 2: submit_order called at least once (bullish crossover triggered a BUY)
+        # Assert 2: first submit_order after warm-up is a BUY on the bullish crossover.
+        # Guards against the crossover logic being accidentally inverted (SELL on bull).
         assert mock_submit_order.call_count >= 1, (
             f"Expected at least 1 submit_order call after bullish MA crossover, got {mock_submit_order.call_count}"
         )
+        first_call_side = mock_order_factory.market.call_args_list[0].kwargs["order_side"]
+        assert first_call_side == OrderSide.BUY, (
+            f"First submit after bullish crossover should be BUY, got {first_call_side}"
+        )
 
-        # Assert 3: _signed_position is non-zero — position tracking reflects applied delta
-        # After the bullish crossover BUY _signed_position should have gone positive,
-        # and after the bearish crossover SELL it ends at or near the short side.
-        # Verify it moved away from zero at some point by checking the final state is
-        # consistent with at least one net trade having been applied.
-        assert strategy._signed_position != 0.0, (
-            "_signed_position should be non-zero after trades — position tracking is broken"
+        # Assert 3: net signed position after the full cycle equals one trade_size worth
+        # (deterministic: 1 BUY of +trade_size followed by 2 SELLs of -trade_size each = -trade_size).
+        # This is stronger than "!= 0.0" — it would fail for pure-SELL runs or wrong direction.
+        assert abs(strategy._signed_position) == pytest.approx(0.001), (
+            f"Expected |_signed_position| == 0.001 after 1 BUY + 2 SELLs, got {strategy._signed_position}"
         )
 
         # Assert 4a: cap enforcement BLOCKS an order that would breach max_position.
-        # Set position near the cap so the next trade would exceed it.
-        strategy._signed_position = 0.999  # cap is 1.0; delta 0.001 => projected 1.000, not > 1.0
+        # Setup: position = 0.999, trade_size raised to 0.01 → projected 1.009 > cap (1.0), block.
+        strategy._signed_position = 0.999
         call_count_before = mock_submit_order.call_count
-        # Use a larger delta (0.01) so 0.999 + 0.01 = 1.009 > 1.0 -> should be blocked
         strategy._config = ToyMomentumConfig(
             instrument_id=InstrumentId.from_str("BTC-USD.HYPERLIQUID"),
             bar_type=BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL"),
