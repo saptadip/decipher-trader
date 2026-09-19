@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+import logging
+
+import httpx
+
+from control_plane.config import get_settings
+
+log = logging.getLogger(__name__)
+
+
+def send(text: str) -> None:
+    """Best-effort Telegram push. No-op when bot token / chat id are not configured.
+    Never raises — must never break a request path.
+
+    The entire body is wrapped in try/except: not just the HTTP call. This guards
+    against any exception from `get_settings()` (e.g. a future pydantic validator
+    change) leaking to a router endpoint and turning an alert failure into a 500.
+    """
+    try:
+        settings = get_settings()
+        token = settings.telegram_bot_token
+        chat_id = settings.telegram_chat_id
+        if not token or not chat_id:
+            return
+        with httpx.Client(timeout=5.0) as c:
+            c.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text},
+            )
+    except Exception as e:
+        log.warning("telegram alert failed: %s", e)

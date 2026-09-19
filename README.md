@@ -48,6 +48,38 @@ The runner refuses to start in live mode if any `status=live` row lacks `promote
 
 Both paths demote the row(s) and broadcast a `kill_all` event over the websocket, which nautilus-runner honours by stopping the node.
 
+## Telegram alerts (optional)
+
+The control-plane can push notifications to Telegram on key control-plane events. This is useful for unattended overnight operation — you get a phone alert without watching the dashboard.
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) (`/newbot`). Copy the token it gives you.
+2. Start a conversation with your bot (send any message to it).
+3. Fetch your chat ID:
+   ```bash
+   curl https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+   Look for `result[0].message.chat.id` in the response.
+4. Add to `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=<token from BotFather>
+   TELEGRAM_CHAT_ID=<your chat id>
+   ```
+
+If either variable is empty (the default), alerts are silently disabled — no configuration change is required for non-Telegram deployments.
+
+### Events that trigger an alert
+
+| Event | Message |
+|---|---|
+| Strategy promoted to live | `✅ Promoted <name> (id=<id>) to live` |
+| Strategy demoted to paper | `⬇️ Demoted <name> (id=<id>)` |
+| Kill-all executed | `🚨 KILL ALL — demoted: <ids>` |
+| Runner heartbeat stale (>90 s) | `⚠️ Stale heartbeat — last runner heartbeat was <N>s ago` |
+
+The stale-heartbeat detector polls the audit log every 30 s and fires once per gap (debounced — it will not repeat while the same gap persists, but will re-alert after a recovery and subsequent new outage).
+
 ## Backup and portability
 
 State is in two named docker volumes: `decipher-db` (SQLite) and `decipher-cache` (backtest data). Back up:

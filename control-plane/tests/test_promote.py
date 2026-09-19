@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,7 +89,8 @@ def test_promote_success(env):
     Session, client = env
     started = datetime.now(timezone.utc) - timedelta(days=20)
     sid = _seed(Session, status=StrategyStatus.paper, paper_started_at=started)
-    resp = client.post(f"/strategies/{sid}/promote", headers=AUTH)
+    with patch("control_plane.routers.strategies.telegram.send") as mock_send:
+        resp = client.post(f"/strategies/{sid}/promote", headers=AUTH)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "live"
@@ -98,14 +100,25 @@ def test_promote_success(env):
         rows = s.scalars(select(AuditEntry).where(AuditEntry.action == "promote")).all()
         assert len(rows) == 1
 
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "Promoted" in msg
+    assert str(sid) in msg
+
 
 def test_demote_flips_live_to_paper(env):
     Session, client = env
     started = datetime.now(timezone.utc) - timedelta(days=20)
     sid = _seed(Session, status=StrategyStatus.live, paper_started_at=started)
-    resp = client.post(f"/strategies/{sid}/demote", headers=AUTH)
+    with patch("control_plane.routers.strategies.telegram.send") as mock_send:
+        resp = client.post(f"/strategies/{sid}/demote", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["status"] == "paper"
+
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "Demoted" in msg
+    assert str(sid) in msg
 
 
 def test_start_paper_from_draft(env):

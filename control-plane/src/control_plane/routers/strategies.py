@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from control_plane import telegram
 from control_plane.auth import require_operator
 from control_plane.config import Settings, get_settings
 from control_plane.db import get_session
@@ -129,6 +130,7 @@ async def promote_strategy(
     session.refresh(strategy)
     from control_plane.events import broadcaster
     await broadcaster.broadcast({"type": "promote", "strategy_id": strategy.id, "ts": now.isoformat()})
+    telegram.send(f"✅ Promoted {strategy.name} (id={strategy.id}) to live")
     return strategy
 
 
@@ -150,6 +152,7 @@ async def demote_strategy(
     session.refresh(strategy)
     from control_plane.events import broadcaster
     await broadcaster.broadcast({"type": "demote", "strategy_id": strategy.id, "ts": datetime.now(timezone.utc).isoformat()})
+    telegram.send(f"⬇️ Demoted {strategy.name} (id={strategy.id})")
     return strategy
 
 

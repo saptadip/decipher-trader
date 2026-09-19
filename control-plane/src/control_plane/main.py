@@ -1,9 +1,30 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from control_plane import heartbeat_monitor
 from control_plane.events import broadcaster
 from control_plane.routers import audit, health, kill, metrics, strategies
 
-app = FastAPI(title="decipher-trader control-plane")
+log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    monitor_task = asyncio.create_task(heartbeat_monitor.run())
+    try:
+        yield
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="decipher-trader control-plane", lifespan=_lifespan)
 app.include_router(health.router)
 app.include_router(strategies.router)
 app.include_router(kill.router)
