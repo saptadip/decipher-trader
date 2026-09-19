@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from nautilus_trader.common import TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Quantity
 from nautilus_trader.model import PositionChanged
@@ -48,6 +49,8 @@ class ToyMomentumConfig(StrategyConfig):
 
 
 _METRICS_INTERVAL_BARS: int = 60
+_RECONCILE_INTERVAL = timedelta(minutes=5)
+_DRIFT_THRESHOLD_MULTIPLIER = 2.0  # drift alerts when abs > trade_size * this
 
 
 class ToyMomentum(Strategy):
@@ -71,6 +74,65 @@ class ToyMomentum(Strategy):
 
     def on_start(self) -> None:
         self.subscribe_bars(self._config.bar_type)
+        # Seed _signed_position from venue. Nautilus reconciliation completes BEFORE on_start,
+        # so portfolio.net_position() reflects the venue-side truth here.
+        seeded = float(self.portfolio.net_position(self._config.instrument_id))
+        if seeded != 0.0:
+            self.log.info(f"adopted venue position at startup: {seeded}")
+            from nautilus_runner import state  # local import to avoid hard dep in tests
+
+            if state.audit_writer is not None and self._config.strategy_db_id is not None:
+                state.audit_writer.post(
+                    actor="runner",
+                    action="position_adopted_on_start",
+                    payload={
+                        "strategy_id": self._config.strategy_db_id,
+                        "venue_position": seeded,
+                    },
+                )
+        self._signed_position = seeded
+        # Schedule the 5-min reconciler on the Nautilus event loop thread.
+        # Use Nautilus's own StrategyId (self.id) so the timer name is unique across
+        # any multi-strategy runner without depending on strategy_db_id being set.
+        self.clock.set_timer(
+            name=f"reconciler-{self.id}",
+            interval=_RECONCILE_INTERVAL,
+            callback=self._reconcile,
+        )
+
+    def _reconcile(self, event: TimeEvent) -> None:
+        venue_pos = float(self.portfolio.net_position(self._config.instrument_id))
+        runner_pos = self._signed_position
+        drift = abs(venue_pos - runner_pos)
+        threshold = float(self._config.trade_size) * _DRIFT_THRESHOLD_MULTIPLIER
+        if drift <= threshold:
+            return
+        self.log.warning(
+            f"position drift: runner={runner_pos}, venue={venue_pos},"
+            f" drift={drift} (threshold={threshold})"
+        )
+        from nautilus_runner import state  # local import to avoid hard dep in tests
+
+        if state.audit_writer is not None and self._config.strategy_db_id is not None:
+            state.audit_writer.post(
+                actor="runner",
+                action="position_drift",
+                payload={
+                    "strategy_id": self._config.strategy_db_id,
+                    "runner_pos": runner_pos,
+                    "venue_pos": venue_pos,
+                    "drift": drift,
+                    "threshold": threshold,
+                },
+            )
+        if drift > self._config.max_position:
+            # Critical: worse than the strategy's own cap. Log ERROR — operator gets
+            # Telegram via control-plane's audit-alert chain — but do not self-kill
+            # from here (chaos-fragile; let the operator see the alert and decide).
+            self.log.error(
+                f"CRITICAL position drift ({drift}) exceeds"
+                f" max_position ({self._config.max_position})"
+            )
 
     def _submit_capped(self, side: OrderSide, delta: float) -> None:
         # G3: refuse to breach the per-strategy position cap.
@@ -167,4 +229,9 @@ class ToyMomentum(Strategy):
         )
 
     def on_stop(self) -> None:
-        pass
+        # Defensive: cancel the reconciler timer so a hypothetical restart of
+        # the same strategy instance doesn't hit a duplicate-registration error.
+        try:
+            self.clock.cancel_timer(f"reconciler-{self.id}")
+        except Exception:
+            pass

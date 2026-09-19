@@ -305,3 +305,176 @@ def test_day_boundary_resets_pnl():
     assert (
         strategy._last_reset_utc_date == date(2020, 1, 2)
     ), "_last_reset_utc_date must advance to the new date after reset"
+
+
+# ---------------------------------------------------------------------------
+# Reconciler tests
+# ---------------------------------------------------------------------------
+
+
+def _make_strategy_with_db_id(
+    trade_size: Decimal = Decimal("0.001"),
+    max_position: float = 1.0,
+    strategy_db_id: int = 42,
+) -> ToyMomentum:
+    instrument = InstrumentId.from_str("BTC-USD.HYPERLIQUID")
+    bar_type = BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL")
+    config = ToyMomentumConfig(
+        instrument_id=instrument,
+        bar_type=bar_type,
+        trade_size=trade_size,
+        max_notional=1000.0,
+        max_daily_loss=100.0,
+        max_position=max_position,
+        strategy_db_id=strategy_db_id,
+    )
+    return ToyMomentum(config)
+
+
+def test_on_start_seeds_signed_position_from_portfolio():
+    """on_start seeds _signed_position from portfolio.net_position when non-zero and audits."""
+    from decimal import Decimal
+
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_portfolio = MagicMock()
+    mock_portfolio.net_position.return_value = Decimal("0.05")
+    mock_clock = MagicMock()
+    mock_audit = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "subscribe_bars", MagicMock()),
+        # self.id is a Nautilus base-class attribute set during full runtime init;
+        # not available on a bare pyo3 ToyMomentum instance under unit test.
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_start()
+
+    assert strategy._signed_position == pytest.approx(0.05)
+    mock_log.info.assert_called_once()
+    mock_audit.post.assert_called_once_with(
+        actor="runner",
+        action="position_adopted_on_start",
+        payload={"strategy_id": 42, "venue_position": 0.05},
+    )
+
+
+def test_on_start_no_audit_when_venue_flat():
+    """on_start must not audit when venue position is zero."""
+    from decimal import Decimal
+
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_portfolio = MagicMock()
+    mock_portfolio.net_position.return_value = Decimal("0.0")
+    mock_clock = MagicMock()
+    mock_audit = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "subscribe_bars", MagicMock()),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_start()
+
+    assert strategy._signed_position == pytest.approx(0.0)
+    mock_log.info.assert_not_called()
+    mock_audit.post.assert_not_called()
+
+
+def test_reconcile_no_drift_no_alert():
+    """_reconcile must do nothing when drift is within threshold."""
+    from decimal import Decimal
+
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id(trade_size=Decimal("0.001"), max_position=1.0)
+    strategy._signed_position = 0.1
+    mock_log = MagicMock()
+    mock_portfolio = MagicMock()
+    mock_portfolio.net_position.return_value = Decimal("0.1")
+    mock_audit = MagicMock()
+    mock_event = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy._reconcile(mock_event)
+
+    mock_log.warning.assert_not_called()
+    mock_audit.post.assert_not_called()
+
+
+def test_reconcile_drift_over_threshold_alerts():
+    """_reconcile must warn and audit when drift > trade_size * 2."""
+    from decimal import Decimal
+
+    import nautilus_runner.state as state_mod
+
+    # trade_size=0.001, threshold=0.002; drift = |0.2 - 0.1| = 0.1 >> threshold
+    strategy = _make_strategy_with_db_id(trade_size=Decimal("0.001"), max_position=1.0)
+    strategy._signed_position = 0.1
+    mock_log = MagicMock()
+    mock_portfolio = MagicMock()
+    mock_portfolio.net_position.return_value = Decimal("0.2")
+    mock_audit = MagicMock()
+    mock_event = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy._reconcile(mock_event)
+
+    mock_log.warning.assert_called_once()
+    mock_audit.post.assert_called_once()
+    call_kwargs = mock_audit.post.call_args.kwargs
+    assert call_kwargs["action"] == "position_drift"
+    assert call_kwargs["payload"]["strategy_id"] == 42
+    assert call_kwargs["payload"]["drift"] == pytest.approx(0.1)
+
+
+def test_reconcile_critical_drift_logs_error():
+    """_reconcile must log ERROR when drift > max_position; no self-kill invocation."""
+    from decimal import Decimal
+
+    import nautilus_runner.state as state_mod
+
+    # max_position=0.05; drift = |0.2 - 0.1| = 0.1 > max_position(0.05)
+    strategy = _make_strategy_with_db_id(trade_size=Decimal("0.001"), max_position=0.05)
+    strategy._signed_position = 0.1
+    mock_log = MagicMock()
+    mock_portfolio = MagicMock()
+    mock_portfolio.net_position.return_value = Decimal("0.2")
+    mock_audit = MagicMock()
+    mock_event = MagicMock()
+    # Positive assertion: pyo3 Strategy.stop is not clean-patchable via patch.object,
+    # so we override it on the instance and assert it was not called. Guards against a
+    # future refactor accidentally introducing a self-kill on critical drift.
+    mock_stop = MagicMock()
+    strategy.stop = mock_stop
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy._reconcile(mock_event)
+
+    mock_log.warning.assert_called_once()
+    mock_log.error.assert_called_once()
+    mock_stop.assert_not_called()

@@ -10,7 +10,7 @@ from nautilus_trader.adapters.hyperliquid import (
     HyperliquidExecutionClientFactory,
 )
 from nautilus_trader.common import Environment
-from nautilus_trader.live import LiveNode, LiveRiskEngineConfig
+from nautilus_trader.live import LiveExecutionEngineConfig, LiveNode, LiveRiskEngineConfig
 from nautilus_trader.model import AccountId, BarType, InstrumentId, StrategyId, TraderId
 
 from nautilus_runner import state
@@ -23,7 +23,7 @@ from nautilus_runner.config import (
 from nautilus_runner.control_plane_client import ControlPlaneClient
 from nautilus_runner.heartbeat import heartbeat_loop
 from nautilus_runner.kill_listener import kill_listener_loop
-from nautilus_runner.state import MetricsWriter
+from nautilus_runner.state import AuditWriter, MetricsWriter
 from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
 
 HYPERLIQUID = "HYPERLIQUID"
@@ -62,6 +62,7 @@ def _build_node(settings: RunnerSettings, strategy_rows: list[dict]) -> LiveNode
         )
         .with_reconciliation(reconciliation=True)
         .with_risk_engine_config(LiveRiskEngineConfig(bypass=True))
+        .with_exec_engine_config(LiveExecutionEngineConfig(position_check_interval_secs=300.0))
         .add_data_client(
             None,
             HyperliquidDataClientFactory(),
@@ -104,6 +105,7 @@ def main() -> None:
 
     settings = RunnerSettings()
     state.metrics = MetricsWriter(settings.control_plane_url, settings.operator_token)
+    state.audit_writer = AuditWriter(settings.control_plane_url, settings.operator_token)
     rows = asyncio.run(_fetch_strategies(settings))
     assert_live_startup_safe(rows, settings.trading_mode)
     node = _build_node(settings, rows)
