@@ -53,3 +53,26 @@ def test_create_returns_draft(client):
     resp2 = client.get("/strategies?status=draft")
     assert resp2.status_code == 200
     assert len(resp2.json()) == 1
+
+
+def test_get_strategy_by_id_returns_row(client):
+    created = client.post(
+        "/strategies",
+        json={"name": "alpha", "code_path": "strategies/alpha/strategy.py", "max_notional": 50, "max_daily_loss": 5, "max_position": 1},
+        headers=_auth(),
+    )
+    assert created.status_code == 201
+    strategy_id = created.json()["id"]
+
+    resp = client.get(f"/strategies/{strategy_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == strategy_id
+    assert body["name"] == "alpha"
+    assert body["status"] == "draft"
+
+
+def test_get_strategy_by_id_404_when_missing(client):
+    resp = client.get("/strategies/999999")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "strategy not found"
