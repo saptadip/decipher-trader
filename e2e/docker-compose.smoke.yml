@@ -7,3 +7,10 @@ services:
       - "8000:8000"
     volumes:
       - /tmp/decipher-e2e:/data
+
+  nautilus-runner:
+    # Override base restart policy so a clean exit stays visible to docker compose ps.
+    restart: "no"
+    depends_on:
+      control-plane:
+        condition: service_healthy

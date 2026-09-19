@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,69 @@ import httpx
 BASE = "http://localhost:8000"
 TOKEN = os.environ["OPERATOR_TOKEN"]
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+# Compose override files used for the smoke run — used to resolve container IDs.
+_COMPOSE_FILES = [
+    "-f", "docker-compose.yml",
+    "-f", "docker-compose.paper.yml",
+    "-f", "e2e/docker-compose.smoke.yml",
+]
+
+
+def _runner_container_id() -> str:
+    """Return the container ID for the nautilus-runner service."""
+    result = subprocess.run(
+        ["docker", "compose"] + _COMPOSE_FILES + ["ps", "-q", "nautilus-runner"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    cid = result.stdout.strip()
+    if not cid:
+        raise SystemExit("nautilus-runner container not found — is it included in the compose up?")
+    return cid
+
+
+def _container_state(cid: str) -> str:
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Status}}", cid],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _container_exit_code(cid: str) -> int:
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.ExitCode}}", cid],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(result.stdout.strip())
+
+
+def _wait_runner_running(cid: str, timeout_s: int = 30) -> None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        state = _container_state(cid)
+        if state == "running":
+            return
+        if state in ("exited", "dead"):
+            raise SystemExit(f"nautilus-runner container already stopped (state={state}) before kill_all was sent")
+        time.sleep(1)
+    raise SystemExit(f"nautilus-runner did not reach 'running' state within {timeout_s}s (last state={_container_state(cid)})")
+
+
+def _wait_runner_exited(cid: str, timeout_s: int = 60) -> None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        state = _container_state(cid)
+        if state == "exited":
+            return
+        time.sleep(2)
+    raise SystemExit(f"nautilus-runner did not reach 'exited' state within {timeout_s}s (last state={_container_state(cid)})")
 
 
 def _wait_healthy(timeout_s: int = 30) -> None:
@@ -70,12 +134,30 @@ def main() -> int:
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "live"
 
-    # G4: kill_all demotes.
+    # --- nautilus-runner verification ---
+    # Resolve the runner container before sending kill_all. The runner must be
+    # running at this point; it started (via depends_on: service_healthy) before
+    # this script began but only fetches paper strategies at boot, so it sees an
+    # empty strategy list — that's the desired shallow smoke behaviour.
+    runner_cid = _runner_container_id()
+    print(f"[runner] container id: {runner_cid}")
+    _wait_runner_running(runner_cid, timeout_s=30)
+    print(f"[runner] state=running confirmed before kill_all")
+
+    # G4: kill_all demotes strategies AND broadcasts the kill event to the runner.
     r = httpx.post(f"{BASE}/kill_all", headers=AUTH)
     assert r.status_code == 200, r.text
     assert sid in r.json()["demoted"]
 
-    print("SMOKE OK")
+    # After kill_all the runner's kill_listener_loop receives {"type":"kill_all"},
+    # calls node.stop(), and the process exits. Give it up to 60 s.
+    print("[runner] waiting for container to reach 'exited' state (up to 60 s)…")
+    _wait_runner_exited(runner_cid, timeout_s=60)
+    exit_code = _container_exit_code(runner_cid)
+    assert exit_code == 0, f"nautilus-runner exited with non-zero code: {exit_code}"
+    print(f"[runner] exited cleanly (exit_code={exit_code})")
+
+    print("SMOKE OK (with runner)")
     return 0
 
 

@@ -53,18 +53,30 @@ Restore on any host by untar-ing into the same volume before `docker compose up`
 
 ## End-to-end smoke test
 
-See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills.
+See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills. The smoke now also boots `nautilus-runner`, verifies it is running before the kill event, and asserts it exits cleanly (exit code 0) within 60 seconds of `POST /kill_all`.
+
+**This smoke connects to real Hyperliquid testnet.** Accept network flake and retry on transient failures.
+
+### Prerequisites
+
+- `.env` populated with at minimum:
+  - `OPERATOR_TOKEN` — long random string.
+  - `HYPERLIQUID_TESTNET_PRIVATE_KEY` — real Hyperliquid testnet private key (runner will fail to boot without it).
+  - `HYPERLIQUID_TESTNET_ACCOUNT_ID` — your testnet account ID.
 
 ### How to run smoke.py
 
-`smoke.py` talks to control-plane on `localhost:8000` and back-dates `paper_started_at` by opening the SQLite file at `/tmp/decipher-e2e/decipher.sqlite3`. The `e2e/docker-compose.smoke.yml` overlay publishes the port and bind-mounts the SQLite file to that host path. It also disables SQLite WAL because cross-OS WAL/SHM locking breaks host-side reads on macOS Docker Desktop.
+`smoke.py` talks to control-plane on `localhost:8000` and back-dates `paper_started_at` by opening the SQLite file at `/tmp/decipher-e2e/decipher.sqlite3`. The `e2e/docker-compose.smoke.yml` overlay publishes the port, bind-mounts the SQLite file to that host path, disables SQLite WAL (cross-OS WAL/SHM locking breaks host-side reads on macOS Docker Desktop), and overrides the runner's `restart: on-failure:3` to `restart: "no"` so a clean exit stays visible to `docker compose ps`.
 
 ```bash
 cp .env.example .env
+# Edit .env: set OPERATOR_TOKEN, HYPERLIQUID_TESTNET_PRIVATE_KEY, HYPERLIQUID_TESTNET_ACCOUNT_ID
 mkdir -p /tmp/decipher-e2e   # on macOS Docker Desktop, use $HOME/.decipher-e2e and symlink
-docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d control-plane
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d
 python3 -m venv /tmp/decipher-e2e-venv
 /tmp/decipher-e2e-venv/bin/pip install httpx
 OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) /tmp/decipher-e2e-venv/bin/python e2e/smoke.py
 docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml down
 ```
+
+On success the script prints `SMOKE OK (with runner)`.
