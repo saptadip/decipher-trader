@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /tmp/decipher-e2e:/data
+      - ${SMOKE_DATA_DIR:-/tmp/decipher-e2e}:/data
 
   nautilus-runner:
     # Override base restart policy so exits stay visible to docker compose ps.

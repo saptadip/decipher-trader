@@ -69,9 +69,14 @@ Two shallow chaos scenarios that test runner and control-plane failure paths aga
 
 These tests connect to real Hyperliquid testnet and are local-only, single-user development tests — they are not run in CI.
 
+The bind-mount source honours `SMOKE_DATA_DIR` (default `/tmp/decipher-e2e`). On **macOS Docker Desktop**, set `SMOKE_DATA_DIR=$HOME/.decipher-e2e` — same reason as smoke.py above.
+
 ### How to run chaos.py
 
 ```bash
+export SMOKE_DATA_DIR=$HOME/.decipher-e2e   # macOS only; skip on Linux
+mkdir -p "$SMOKE_DATA_DIR"
+
 # Scenario A
 docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d
 OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) python e2e/chaos.py A
@@ -100,12 +105,15 @@ See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow
 
 ### How to run smoke.py
 
-`smoke.py` talks to control-plane on `localhost:8000` and back-dates `paper_started_at` by opening the SQLite file at `/tmp/decipher-e2e/decipher.sqlite3`. The `e2e/docker-compose.smoke.yml` overlay publishes the port, bind-mounts the SQLite file to that host path, disables SQLite WAL (cross-OS WAL/SHM locking breaks host-side reads on macOS Docker Desktop), and overrides the runner's `restart: on-failure:3` to `restart: "no"` so a clean exit stays visible to `docker compose ps`.
+`smoke.py` talks to control-plane on `localhost:8000` and back-dates `paper_started_at` by opening the SQLite file directly on disk. The `e2e/docker-compose.smoke.yml` overlay publishes the port, bind-mounts the SQLite file, disables SQLite WAL (cross-OS WAL/SHM locking breaks host-side reads on macOS Docker Desktop), and overrides the runner's `restart: on-failure:3` to `restart: "no"` so a clean exit stays visible to `docker compose ps`.
+
+The bind-mount source and the host-side SQLite path are both controlled by the `SMOKE_DATA_DIR` environment variable (default `/tmp/decipher-e2e`). On **macOS Docker Desktop**, `/tmp` lives inside the Docker VM and is invisible to host Python, so set `SMOKE_DATA_DIR=$HOME/.decipher-e2e` (under `/Users`, which Docker Desktop shares by default). On Linux the default is fine.
 
 ```bash
 cp .env.example .env
 # Edit .env: set OPERATOR_TOKEN, HYPERLIQUID_TESTNET_PRIVATE_KEY, HYPERLIQUID_TESTNET_ACCOUNT_ID
-mkdir -p /tmp/decipher-e2e   # on macOS Docker Desktop, use $HOME/.decipher-e2e and symlink
+export SMOKE_DATA_DIR=$HOME/.decipher-e2e   # macOS only; skip on Linux
+mkdir -p "$SMOKE_DATA_DIR"
 docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d
 python3 -m venv /tmp/decipher-e2e-venv
 /tmp/decipher-e2e-venv/bin/pip install httpx

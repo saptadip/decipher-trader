@@ -120,7 +120,8 @@ def main() -> int:
     # in real operation the operator waits the full 14 days. We do the DB touch through a
     # bind-mounted SQLite file that the compose override in Step 4 sets up.
     import sqlite3
-    conn = sqlite3.connect("/tmp/decipher-e2e/decipher.sqlite3")
+    data_dir = os.environ.get("SMOKE_DATA_DIR", "/tmp/decipher-e2e")
+    conn = sqlite3.connect(f"{data_dir}/decipher.sqlite3")
     try:
         conn.execute(
             "UPDATE strategies SET paper_started_at=? WHERE id=?",
