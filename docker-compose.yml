@@ -34,7 +34,7 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
-    restart: unless-stopped
+    restart: on-failure:3
 
   dashboard:
     build:
@@ -50,3 +50,9 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/login', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s

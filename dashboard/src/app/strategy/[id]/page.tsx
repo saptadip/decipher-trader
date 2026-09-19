@@ -16,15 +16,17 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
     controlPlane.get(`/strategies?status=draft,backtest,paper,live,retired`),
     controlPlane.get(`/metrics/${id}`),
   ]);
-  const rows = (await sResp.json()) as Array<{
-    id: number;
-    name: string;
-    status: string;
-    paper_started_at: string | null;
-    promoted_at: string | null;
-  }>;
+  const rows = sResp.ok
+    ? ((await sResp.json()) as Array<{
+        id: number;
+        name: string;
+        status: string;
+        paper_started_at: string | null;
+        promoted_at: string | null;
+      }>)
+    : [];
   const row = rows.find((r) => r.id === Number(id));
-  const metrics = (await mResp.json()) as Array<{ pnl: number }>;
+  const metrics = mResp.ok ? ((await mResp.json()) as Array<{ pnl: number }>) : [];
 
   if (!row) return <main style={{ padding: 24 }}>Not found.</main>;
 

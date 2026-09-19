@@ -76,8 +76,12 @@ async def promote_strategy(
     if strategy is None:
         raise HTTPException(status_code=404, detail="strategy not found")
     if strategy.status is not StrategyStatus.paper:
+        _write_audit(session, actor, "promote_refused", {"strategy_id": strategy_id, "reason": "wrong_status"})
+        session.commit()
         raise HTTPException(status_code=409, detail=f"strategy in status {strategy.status.value}, not paper")
     if strategy.paper_started_at is None:
+        _write_audit(session, actor, "promote_refused", {"strategy_id": strategy_id, "reason": "missing_paper_started_at"})
+        session.commit()
         raise HTTPException(status_code=409, detail="paper_started_at not set")
 
     now = datetime.now(timezone.utc)
@@ -86,6 +90,8 @@ async def promote_strategy(
     if paper_started.tzinfo is None:
         paper_started = paper_started.replace(tzinfo=timezone.utc)
     if now - paper_started < min_delta:
+        _write_audit(session, actor, "promote_refused", {"strategy_id": strategy_id, "reason": "insufficient_paper_days"})
+        session.commit()
         raise HTTPException(
             status_code=409,
             detail=f"must run in paper for at least {settings.paper_forward_min_days} days",
@@ -100,6 +106,8 @@ async def promote_strategy(
         .limit(1)
     )
     if fatal is not None:
+        _write_audit(session, actor, "promote_refused", {"strategy_id": strategy_id, "reason": "fatal_drawdown"})
+        session.commit()
         raise HTTPException(status_code=409, detail="fatal drawdown snapshot in review window; refuse to promote")
 
     strategy.status = StrategyStatus.live

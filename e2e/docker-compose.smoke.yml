@@ -1,0 +1,9 @@
+services:
+  control-plane:
+    environment:
+      - CONTROL_PLANE_DB_PATH=/data/decipher.sqlite3
+      - CONTROL_PLANE_SQLITE_WAL=false
+    ports:
+      - "8000:8000"
+    volumes:
+      - /tmp/decipher-e2e:/data

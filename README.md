@@ -54,3 +54,17 @@ Restore on any host by untar-ing into the same volume before `docker compose up`
 ## End-to-end smoke test
 
 See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow with the operator token, then kills.
+
+### How to run smoke.py
+
+`smoke.py` talks to control-plane on `localhost:8000` and back-dates `paper_started_at` by opening the SQLite file at `/tmp/decipher-e2e/decipher.sqlite3`. The `e2e/docker-compose.smoke.yml` overlay publishes the port and bind-mounts the SQLite file to that host path. It also disables SQLite WAL because cross-OS WAL/SHM locking breaks host-side reads on macOS Docker Desktop.
+
+```bash
+cp .env.example .env
+mkdir -p /tmp/decipher-e2e   # on macOS Docker Desktop, use $HOME/.decipher-e2e and symlink
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d control-plane
+python3 -m venv /tmp/decipher-e2e-venv
+/tmp/decipher-e2e-venv/bin/pip install httpx
+OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) /tmp/decipher-e2e-venv/bin/python e2e/smoke.py
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml down
+```
