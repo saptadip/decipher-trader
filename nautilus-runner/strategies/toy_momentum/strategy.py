@@ -92,8 +92,10 @@ class ToyMomentum(Strategy):
                 )
         self._signed_position = seeded
         # Schedule the 5-min reconciler on the Nautilus event loop thread.
+        # Use Nautilus's own StrategyId (self.id) so the timer name is unique across
+        # any multi-strategy runner without depending on strategy_db_id being set.
         self.clock.set_timer(
-            name=f"reconciler-{self._config.strategy_db_id or 'unknown'}",
+            name=f"reconciler-{self.id}",
             interval=_RECONCILE_INTERVAL,
             callback=self._reconcile,
         )
@@ -124,11 +126,12 @@ class ToyMomentum(Strategy):
                 },
             )
         if drift > self._config.max_position:
-            # Critical: worse than the strategy's own cap. Log ERROR — operator gets Telegram
-            # via control-plane's audit-alert chain — but do not self-kill from here (chaos-fragile;
-            # let the operator see the alert and decide).
+            # Critical: worse than the strategy's own cap. Log ERROR — operator gets
+            # Telegram via control-plane's audit-alert chain — but do not self-kill
+            # from here (chaos-fragile; let the operator see the alert and decide).
             self.log.error(
-                f"CRITICAL position drift ({drift}) exceeds max_position ({self._config.max_position})"
+                f"CRITICAL position drift ({drift}) exceeds"
+                f" max_position ({self._config.max_position})"
             )
 
     def _submit_capped(self, side: OrderSide, delta: float) -> None:
@@ -226,4 +229,9 @@ class ToyMomentum(Strategy):
         )
 
     def on_stop(self) -> None:
-        pass
+        # Defensive: cancel the reconciler timer so a hypothetical restart of
+        # the same strategy instance doesn't hit a duplicate-registration error.
+        try:
+            self.clock.cancel_timer(f"reconciler-{self.id}")
+        except Exception:
+            pass

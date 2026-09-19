@@ -349,6 +349,9 @@ def test_on_start_seeds_signed_position_from_portfolio():
         patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
         patch.object(ToyMomentum, "subscribe_bars", MagicMock()),
+        # self.id is a Nautilus base-class attribute set during full runtime init;
+        # not available on a bare pyo3 ToyMomentum instance under unit test.
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
     ):
         strategy.on_start()
@@ -380,6 +383,7 @@ def test_on_start_no_audit_when_venue_flat():
         patch.object(ToyMomentum, "portfolio", mock_portfolio, create=True),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
         patch.object(ToyMomentum, "subscribe_bars", MagicMock()),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
     ):
         strategy.on_start()
@@ -458,6 +462,11 @@ def test_reconcile_critical_drift_logs_error():
     mock_portfolio.net_position.return_value = Decimal("0.2")
     mock_audit = MagicMock()
     mock_event = MagicMock()
+    # Positive assertion: pyo3 Strategy.stop is not clean-patchable via patch.object,
+    # so we override it on the instance and assert it was not called. Guards against a
+    # future refactor accidentally introducing a self-kill on critical drift.
+    mock_stop = MagicMock()
+    strategy.stop = mock_stop
 
     with (
         patch.object(ToyMomentum, "log", mock_log),
@@ -468,5 +477,4 @@ def test_reconcile_critical_drift_logs_error():
 
     mock_log.warning.assert_called_once()
     mock_log.error.assert_called_once()
-    # Confirm no method that resembles a "self-kill" or stop was invoked
-    assert not hasattr(strategy, "_killed") or not strategy._killed
+    mock_stop.assert_not_called()
