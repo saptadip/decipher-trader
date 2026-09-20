@@ -50,19 +50,23 @@ async def add_audit(
     session.add(entry)
     session.commit()
     session.refresh(entry)
-    # Immediate Telegram alert on venue socket disconnect — provides sub-interval
+    # Immediate Telegram alerts on venue-socket transitions — provides sub-interval
     # visibility that the stale-heartbeat detector (absence-of-heartbeat) cannot give.
     # Fires after commit so the audit row is durable before the alert.
-    if payload.action == "socket_disconnected":
+    if payload.action in ("socket_disconnected", "socket_reconnected"):
         try:
             inner = json.loads(payload.payload_json)
             strategy_id = inner.get("strategy_id", "unknown")
-            state = inner.get("state", "DISCONNECTED")
+            state = inner.get("state", "unknown")
             venue = inner.get("venue")
             endpoint = inner.get("endpoint", "")
             context = f" venue={venue}" if venue else f" endpoint={endpoint}"
+            emoji = "\U0001f50c" if payload.action == "socket_disconnected" else "✅"
+            verb = (
+                "disconnected" if payload.action == "socket_disconnected" else "reconnected"
+            )
             telegram.send(
-                f"\U0001f50c Venue socket {state} — strategy {strategy_id}{context}"
+                f"{emoji} Venue socket {verb} ({state}) — strategy {strategy_id}{context}"
             )
         except Exception:
             pass  # best-effort; must never break the response path

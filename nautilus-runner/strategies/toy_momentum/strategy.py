@@ -131,8 +131,17 @@ class ToyMomentum(Strategy):
         # per-emission cost becomes non-trivial; prune to last K entries in Phase 2.
         self._realized_pnl_history: list[float] = []
 
+        # Sub-interval venue-socket disconnect tracking. `_socket_was_disconnected`
+        # flips to True on a DISCONNECTED event; the next CONNECTED event fires a
+        # "reconnected" audit + Telegram so the operator sees recovery confirmation.
+        self._socket_was_disconnected: bool = False
+
     def on_start(self) -> None:
         self.subscribe_bars(self._config.bar_type)
+        # Required for on_socket_state dispatch: Nautilus routes SocketStateChanged
+        # events via msgbus subscription (same pattern as on_bar → subscribe_bars).
+        # Without this call, on_socket_state is dead code in live trading.
+        self.subscribe_socket_state()
         # Seed _signed_position from venue. Nautilus reconciliation completes BEFORE on_start,
         # so portfolio.net_position() reflects the venue-side truth here.
         seeded = float(self.portfolio.net_position(self._config.instrument_id))
@@ -274,40 +283,81 @@ class ToyMomentum(Strategy):
         self._n_trades += 1
 
     def on_socket_state(self, event: SocketStateChanged) -> None:
-        """Alert on venue websocket disconnect for sub-interval visibility.
+        """Alert on venue websocket disconnect/reconnect for sub-interval visibility.
 
         Nautilus fires SocketStateChanged for connect / disconnect transitions on
-        any adapter websocket the node holds.  rc5 exposes two states: CONNECTED
-        and DISCONNECTED.  We only act on DISCONNECTED — CONNECTED is informational
-        and doesn't need to page the operator.
+        any adapter websocket the node holds. Known states in the installed version:
+        CONNECTED and DISCONNECTED. If upstream adds RECONNECTING or ERROR, extend
+        the branches below.
 
-        Note: SocketState is a Rust-backed enum without a .name attribute; compare
-        directly with == against SocketState constants.
+        Behaviour:
+        - DISCONNECTED → alert + audit "socket_disconnected"; remember disconnect.
+        - CONNECTED after a prior DISCONNECTED → alert + audit "socket_reconnected".
+        - CONNECTED at startup or with no prior DISCONNECTED → silent (avoids spam
+          on the initial connection).
+
+        Note: SocketState is a Rust-backed enum without a .name attribute; extract
+        the short name via `str(event.state).split(".")[-1]` so audit + Telegram
+        show "DISCONNECTED" instead of "SocketState.DISCONNECTED".
         """
-        if event.state != SocketState.DISCONNECTED:
-            return
-        state_str = str(event.state)
+        state_short = str(event.state).split(".")[-1]
         client_id_str = str(event.client_id)
         endpoint_str = str(event.endpoint)
         venue_str = str(event.venue) if event.venue is not None else None
-        self.log.warning(
-            f"venue socket transitioned to DISCONNECTED:"
-            f" client_id={client_id_str} endpoint={endpoint_str}"
-        )
+
+        if event.state == SocketState.DISCONNECTED:
+            self.log.warning(
+                f"venue socket transitioned to {state_short}:"
+                f" client_id={client_id_str} endpoint={endpoint_str}"
+            )
+            self._socket_was_disconnected = True
+            self._post_socket_audit(
+                action="socket_disconnected",
+                state_short=state_short,
+                client_id_str=client_id_str,
+                endpoint_str=endpoint_str,
+                venue_str=venue_str,
+            )
+            return
+
+        if event.state == SocketState.CONNECTED and self._socket_was_disconnected:
+            self.log.info(
+                f"venue socket reconnected: client_id={client_id_str}"
+                f" endpoint={endpoint_str}"
+            )
+            self._socket_was_disconnected = False
+            self._post_socket_audit(
+                action="socket_reconnected",
+                state_short=state_short,
+                client_id_str=client_id_str,
+                endpoint_str=endpoint_str,
+                venue_str=venue_str,
+            )
+
+    def _post_socket_audit(
+        self,
+        *,
+        action: str,
+        state_short: str,
+        client_id_str: str,
+        endpoint_str: str,
+        venue_str: str | None,
+    ) -> None:
         from nautilus_runner import state  # local import to avoid hard dep in tests
 
-        if state.audit_writer is not None and self._config.strategy_db_id is not None:
-            state.audit_writer.post(
-                actor="runner",
-                action="socket_disconnected",
-                payload={
-                    "strategy_id": self._config.strategy_db_id,
-                    "state": state_str,
-                    "client_id": client_id_str,
-                    "endpoint": endpoint_str,
-                    "venue": venue_str,
-                },
-            )
+        if state.audit_writer is None or self._config.strategy_db_id is None:
+            return
+        state.audit_writer.post(
+            actor="runner",
+            action=action,
+            payload={
+                "strategy_id": self._config.strategy_db_id,
+                "state": state_short,
+                "client_id": client_id_str,
+                "endpoint": endpoint_str,
+                "venue": venue_str,
+            },
+        )
 
     def _emit_metric(self) -> None:
         from nautilus_runner import state  # local import to avoid hard dep in tests
