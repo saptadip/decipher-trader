@@ -111,21 +111,38 @@ def main() -> None:
     rows = asyncio.run(_fetch_strategies(settings))
     assert_live_startup_safe(rows, settings.trading_mode)
 
-    os.makedirs(settings.streaming_catalog_path, exist_ok=True)
+    # I4: create the streaming catalog directory eagerly with a friendly error so an
+    # unmounted decipher-cache volume produces an operator-actionable message rather
+    # than a raw OSError at process start.
+    try:
+        os.makedirs(settings.streaming_catalog_path, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot create streaming catalog directory {settings.streaming_catalog_path!r}; "
+            "check that the decipher-cache volume is mounted and writable"
+        ) from exc
 
     node = _build_node(settings, rows)
 
     # Attach a StreamingFeatherWriter so every Nautilus event (orders, fills,
-    # positions, bars, etc.) is persisted to Parquet files under the catalog path.
-    # StreamingConfig is not available for LiveNode in the installed rc5 wheel
-    # (the `streaming` feature flag is absent), so we wire via the standalone
-    # StreamingFeatherWriter which subscribes directly to the global message bus.
+    # positions, bars, etc.) is persisted to Feather (Arrow-IPC) files under the
+    # catalog path. `StreamingConfig` IS importable in rc5 but is backtest-only —
+    # no `LiveNodeBuilder.with_streaming_config`, no `LiveNodeConfig.streaming` — so
+    # we wire the standalone `StreamingFeatherWriter` which subscribes to Nautilus's
+    # global thread-local message bus.
+    #
+    # Clock caveat: `LiveClock` is not user-constructable from Python in rc5, so we
+    # pass `Clock.new_test()`. That clock never advances, which makes the writer's
+    # `flush_interval_ms` timer-based flush a permanent no-op. Persistence therefore
+    # depends on the explicit `feather_writer.close()` call after `node.run()` — see
+    # the shutdown block below. `flush_interval_ms` is set to 0 as documentation that
+    # the timer path is not the persistence mechanism here.
     feather_writer = StreamingFeatherWriter(
         path=settings.streaming_catalog_path,
         cache=node.cache,
         clock=Clock.new_test(),
         fs_protocol="file",
-        flush_interval_ms=1000,
+        flush_interval_ms=0,
     )
     feather_writer.subscribe()
 
@@ -172,6 +189,13 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sig)
 
     node.run()
+    # C1+C2: flush + finalize the Feather buffers to disk BEFORE returning. Without
+    # this call, the writer's in-memory Arrow buffers are silently abandoned on
+    # graceful stop (see clock caveat on the StreamingFeatherWriter above).
+    try:
+        feather_writer.close()
+    except Exception:
+        pass  # best-effort — never break shutdown on a write finalize failure
     loop.call_soon_threadsafe(stop_event.set)
 
 
