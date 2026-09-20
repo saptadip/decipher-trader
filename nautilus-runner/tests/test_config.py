@@ -51,3 +51,18 @@ def test_settings_defaults(monkeypatch):
     s = RunnerSettings()
     assert s.trading_mode == "paper"
     assert s.trader_id == "DECIPHER-001"
+
+
+def test_streaming_catalog_path_default(monkeypatch):
+    monkeypatch.setenv("CONTROL_PLANE_URL", "http://cp:8000")
+    monkeypatch.setenv("OPERATOR_TOKEN", "t")
+    s = RunnerSettings()
+    assert s.streaming_catalog_path == "/app/cache/streaming"
+
+
+def test_streaming_catalog_path_override(monkeypatch):
+    monkeypatch.setenv("CONTROL_PLANE_URL", "http://cp:8000")
+    monkeypatch.setenv("OPERATOR_TOKEN", "t")
+    monkeypatch.setenv("STREAMING_CATALOG_PATH", "/tmp/x")
+    s = RunnerSettings()
+    assert s.streaming_catalog_path == "/tmp/x"
