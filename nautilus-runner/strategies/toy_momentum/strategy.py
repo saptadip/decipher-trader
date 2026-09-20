@@ -7,7 +7,7 @@ from typing import Any
 
 import statistics
 
-from nautilus_trader.common import TimeEvent
+from nautilus_trader.common import SocketStateChanged, SocketState, TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Quantity
 from nautilus_trader.model import PositionChanged
@@ -272,6 +272,42 @@ class ToyMomentum(Strategy):
             self._realized_pnl_today += pnl_value
             self._realized_pnl_history.append(pnl_value)
         self._n_trades += 1
+
+    def on_socket_state(self, event: SocketStateChanged) -> None:
+        """Alert on venue websocket disconnect for sub-interval visibility.
+
+        Nautilus fires SocketStateChanged for connect / disconnect transitions on
+        any adapter websocket the node holds.  rc5 exposes two states: CONNECTED
+        and DISCONNECTED.  We only act on DISCONNECTED — CONNECTED is informational
+        and doesn't need to page the operator.
+
+        Note: SocketState is a Rust-backed enum without a .name attribute; compare
+        directly with == against SocketState constants.
+        """
+        if event.state != SocketState.DISCONNECTED:
+            return
+        state_str = str(event.state)
+        client_id_str = str(event.client_id)
+        endpoint_str = str(event.endpoint)
+        venue_str = str(event.venue) if event.venue is not None else None
+        self.log.warning(
+            f"venue socket transitioned to DISCONNECTED:"
+            f" client_id={client_id_str} endpoint={endpoint_str}"
+        )
+        from nautilus_runner import state  # local import to avoid hard dep in tests
+
+        if state.audit_writer is not None and self._config.strategy_db_id is not None:
+            state.audit_writer.post(
+                actor="runner",
+                action="socket_disconnected",
+                payload={
+                    "strategy_id": self._config.strategy_db_id,
+                    "state": state_str,
+                    "client_id": client_id_str,
+                    "endpoint": endpoint_str,
+                    "venue": venue_str,
+                },
+            )
 
     def _emit_metric(self) -> None:
         from nautilus_runner import state  # local import to avoid hard dep in tests

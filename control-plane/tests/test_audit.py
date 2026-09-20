@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,3 +43,56 @@ def test_post_and_filter(client):
     resp = client.get("/audit?limit=1")
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Native-epic 5 tests: Telegram alert on socket_disconnected audit action
+# ---------------------------------------------------------------------------
+
+
+def test_create_audit_socket_disconnect_fires_telegram(client):
+    """POST audit with action=socket_disconnected must return 201 and fire telegram.send."""
+    payload = {
+        "strategy_id": 99,
+        "state": "SocketState.DISCONNECTED",
+        "client_id": "HYPERLIQUID",
+        "endpoint": "wss://api.hyperliquid.xyz/ws",
+        "venue": "HYPERLIQUID",
+    }
+    sent = []
+    with patch("control_plane.routers.audit.telegram") as mock_tg:
+        mock_tg.send.side_effect = lambda msg: sent.append(msg)
+        resp = client.post(
+            "/audit",
+            headers={"Authorization": "Bearer s"},
+            json={
+                "actor": "runner",
+                "action": "socket_disconnected",
+                "payload_json": json.dumps(payload),
+            },
+        )
+
+    assert resp.status_code == 201
+    assert len(sent) == 1, f"Expected telegram.send called once, got: {sent}"
+    msg = sent[0]
+    assert "99" in msg, f"strategy_id not in alert message: {msg}"
+    assert "DISCONNECTED" in msg or "socket" in msg.lower(), f"disconnect not referenced: {msg}"
+
+
+def test_create_audit_non_disconnect_no_telegram(client):
+    """POST audit with action != socket_disconnected must NOT fire telegram.send."""
+    sent = []
+    with patch("control_plane.routers.audit.telegram") as mock_tg:
+        mock_tg.send.side_effect = lambda msg: sent.append(msg)
+        resp = client.post(
+            "/audit",
+            headers={"Authorization": "Bearer s"},
+            json={
+                "actor": "runner",
+                "action": "heartbeat",
+                "payload_json": json.dumps({"strategy_id": 1}),
+            },
+        )
+
+    assert resp.status_code == 201
+    assert sent == [], f"telegram.send must not be called for non-disconnect actions, got: {sent}"

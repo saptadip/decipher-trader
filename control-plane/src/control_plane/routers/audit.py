@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from control_plane.auth import require_operator
 from control_plane.db import get_session
+from control_plane import telegram
 from control_plane.models import AuditEntry
 from control_plane.schemas import AuditEntryIn, AuditEntryOut
 
@@ -48,4 +50,20 @@ async def add_audit(
     session.add(entry)
     session.commit()
     session.refresh(entry)
+    # Immediate Telegram alert on venue socket disconnect — provides sub-interval
+    # visibility that the stale-heartbeat detector (absence-of-heartbeat) cannot give.
+    # Fires after commit so the audit row is durable before the alert.
+    if payload.action == "socket_disconnected":
+        try:
+            inner = json.loads(payload.payload_json)
+            strategy_id = inner.get("strategy_id", "unknown")
+            state = inner.get("state", "DISCONNECTED")
+            venue = inner.get("venue")
+            endpoint = inner.get("endpoint", "")
+            context = f" venue={venue}" if venue else f" endpoint={endpoint}"
+            telegram.send(
+                f"\U0001f50c Venue socket {state} — strategy {strategy_id}{context}"
+            )
+        except Exception:
+            pass  # best-effort; must never break the response path
     return entry

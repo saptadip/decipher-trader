@@ -833,3 +833,107 @@ def test_on_stop_skips_audit_when_no_strategy_db_id():
     mock_cancel.assert_called_once_with(strategy._config.instrument_id)
     mock_close.assert_called_once_with(strategy._config.instrument_id)
     mock_audit.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Native-epic 5 tests: on_socket_state venue disconnect alerting
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_socket_event(state_value):
+    """Build a MagicMock that mimics SocketStateChanged with the given SocketState value."""
+    from nautilus_trader.common import SocketState
+
+    event = MagicMock()
+    event.state = state_value
+    event.client_id = "HYPERLIQUID"
+    event.endpoint = "wss://api.hyperliquid.xyz/ws"
+    event.venue = "HYPERLIQUID"
+    return event
+
+
+def test_on_socket_state_disconnected_alerts():
+    """DISCONNECTED state must log a warning and post a socket_disconnected audit entry."""
+    from nautilus_trader.common import SocketState
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_audit = MagicMock()
+    event = _make_mock_socket_event(SocketState.DISCONNECTED)
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_socket_state(event)
+
+    mock_log.warning.assert_called_once()
+    warning_msg = mock_log.warning.call_args[0][0]
+    assert "DISCONNECTED" in warning_msg
+
+    mock_audit.post.assert_called_once()
+    call_kwargs = mock_audit.post.call_args[1]
+    assert call_kwargs["actor"] == "runner"
+    assert call_kwargs["action"] == "socket_disconnected"
+    assert call_kwargs["payload"]["strategy_id"] == 42
+    assert "state" in call_kwargs["payload"]
+
+
+def test_on_socket_state_connected_ignored():
+    """CONNECTED state must NOT log a warning and must NOT post an audit entry."""
+    from nautilus_trader.common import SocketState
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_audit = MagicMock()
+    event = _make_mock_socket_event(SocketState.CONNECTED)
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_socket_state(event)
+
+    mock_log.warning.assert_not_called()
+    mock_audit.post.assert_not_called()
+
+
+def test_on_socket_state_skips_audit_when_no_strategy_db_id():
+    """DISCONNECTED must log a warning but NOT audit when strategy_db_id is None."""
+    from nautilus_trader.common import SocketState
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy()  # no strategy_db_id → defaults to None
+    mock_log = MagicMock()
+    mock_audit = MagicMock()
+    event = _make_mock_socket_event(SocketState.DISCONNECTED)
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_socket_state(event)
+
+    mock_log.warning.assert_called_once()
+    mock_audit.post.assert_not_called()
+
+
+def test_on_socket_state_skips_audit_when_no_audit_writer():
+    """DISCONNECTED must log a warning but NOT crash when audit_writer is None."""
+    from nautilus_trader.common import SocketState
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    event = _make_mock_socket_event(SocketState.DISCONNECTED)
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(state_mod, "audit_writer", None),
+    ):
+        strategy.on_socket_state(event)
+
+    mock_log.warning.assert_called_once()
+    # No assertion needed for audit — test simply verifies no AttributeError raised.
