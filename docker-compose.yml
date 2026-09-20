@@ -31,6 +31,8 @@ services:
       - decipher
     env_file:
       - .env
+    volumes:
+      - decipher-cache:/app/cache
     depends_on:
       control-plane:
         condition: service_healthy

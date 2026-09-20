@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from decimal import Decimal
 
 from nautilus_trader.adapters.hyperliquid import (
@@ -9,9 +10,10 @@ from nautilus_trader.adapters.hyperliquid import (
     HyperliquidExecutionClientConfig,
     HyperliquidExecutionClientFactory,
 )
-from nautilus_trader.common import Environment
+from nautilus_trader.common import Clock, Environment
 from nautilus_trader.live import LiveExecutionEngineConfig, LiveNode, LiveRiskEngineConfig
 from nautilus_trader.model import AccountId, BarType, InstrumentId, StrategyId, TraderId
+from nautilus_trader.persistence import StreamingFeatherWriter
 
 from nautilus_runner import state
 from nautilus_runner.config import (
@@ -108,7 +110,24 @@ def main() -> None:
     state.audit_writer = AuditWriter(settings.control_plane_url, settings.operator_token)
     rows = asyncio.run(_fetch_strategies(settings))
     assert_live_startup_safe(rows, settings.trading_mode)
+
+    os.makedirs(settings.streaming_catalog_path, exist_ok=True)
+
     node = _build_node(settings, rows)
+
+    # Attach a StreamingFeatherWriter so every Nautilus event (orders, fills,
+    # positions, bars, etc.) is persisted to Parquet files under the catalog path.
+    # StreamingConfig is not available for LiveNode in the installed rc5 wheel
+    # (the `streaming` feature flag is absent), so we wire via the standalone
+    # StreamingFeatherWriter which subscribes directly to the global message bus.
+    feather_writer = StreamingFeatherWriter(
+        path=settings.streaming_catalog_path,
+        cache=node.cache,
+        clock=Clock.new_test(),
+        fs_protocol="file",
+        flush_interval_ms=1000,
+    )
+    feather_writer.subscribe()
 
     stop_event = asyncio.Event()
     ws_url = (

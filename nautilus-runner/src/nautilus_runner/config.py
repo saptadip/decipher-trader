@@ -20,6 +20,10 @@ class RunnerSettings(BaseSettings):
     testnet_account_id: str = Field(default="HYPERLIQUID-TESTNET-001", alias="HYPERLIQUID_TESTNET_ACCOUNT_ID")
     mainnet_private_key: str | None = Field(default=None, alias="HYPERLIQUID_MAINNET_PRIVATE_KEY")
     mainnet_account_id: str | None = Field(default=None, alias="HYPERLIQUID_MAINNET_ACCOUNT_ID")
+    streaming_catalog_path: str = Field(
+        default="/app/cache/streaming",
+        alias="STREAMING_CATALOG_PATH",
+    )
 
 
 def hyperliquid_env_for(trading_mode: str) -> HyperliquidEnvironment:
