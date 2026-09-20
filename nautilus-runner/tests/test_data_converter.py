@@ -28,7 +28,7 @@ def _row(open_ms: int, close_ms: int, o: str, h: str, l: str, c: str, v: str) ->
 
 
 def test_parse_kline_row_maps_all_fields():
-    row = _row(1_700_000_000_000, 1_700_000_059_999, "50000.10", "50010.50", "49990.00", "50005.25", "1.234")
+    row = _row(1_700_000_000_000, 1_700_000_059_999, o="50000.10", h="50010.50", l="49990.00", c="50005.25", v="1.234")
     bar = parse_kline_row(row, BAR_TYPE, price_precision=2, size_precision=3)
 
     assert bar.bar_type == BAR_TYPE
@@ -50,6 +50,24 @@ def test_parse_kline_row_rejects_short_row():
         assert "Kline row must have >= 7 columns" in str(exc)
     else:
         raise AssertionError("expected ValueError for short row")
+
+
+def test_parse_kline_row_rejects_high_below_close():
+    """Bad OHLC surfaces at parse time (Nautilus Bar enforces relational invariants)."""
+    bad = _row(1_700_000_000_000, 1_700_000_059_999, o="100.00", h="105.00", l="95.00", c="110.00", v="1.0")
+    try:
+        parse_kline_row(bad, BAR_TYPE, 2, 3)
+    except ValueError as exc:
+        assert "high" in str(exc)
+    else:
+        raise AssertionError("expected Nautilus to reject high < close")
+
+
+def test_parse_kline_row_uses_decimal_at_higher_precision():
+    """Decimal path preserves 8-dp values (float would round the last digit)."""
+    row = _row(1_700_000_000_000, 1_700_000_059_999, o="0.12345678", h="0.12345678", l="0.12345678", c="0.12345678", v="1.5")
+    bar = parse_kline_row(row, BAR_TYPE, price_precision=8, size_precision=3)
+    assert str(bar.close) == "0.12345678"
 
 
 def test_parse_kline_rows_streams_bars_in_order():

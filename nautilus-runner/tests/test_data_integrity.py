@@ -77,3 +77,17 @@ def test_to_dict_includes_ok_flag():
     assert d["ok"] is True
     assert d["row_count"] == 3
     assert d["gaps"] == []
+
+
+def test_check_bars_reports_multiple_failure_classes_together():
+    """Independent failure buckets do not swallow one another (gap + duplicate)."""
+    bars = [
+        _bar(1 * MINUTE_NS),
+        _bar(2 * MINUTE_NS),
+        _bar(4 * MINUTE_NS),
+        _bar(4 * MINUTE_NS),
+    ]
+    report = check_bars(bars, interval_ns=MINUTE_NS)
+    assert not report.ok
+    assert report.gaps == [(2 * MINUTE_NS, 4 * MINUTE_NS)]
+    assert report.duplicates == [4 * MINUTE_NS]

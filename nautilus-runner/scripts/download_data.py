@@ -108,7 +108,10 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"wrote bars to catalog under {out_dir}", flush=True)
 
     if args.funding:
-        entries = await client.fetch_funding(args.symbol, date_to_ms(start), date_to_ms(end))
+        # Binance treats fundingRate endTime as inclusive; make the funding window
+        # match the exclusive-end semantics used for bars above.
+        funding_end_ms = date_to_ms(end) - 1
+        entries = await client.fetch_funding(args.symbol, date_to_ms(start), funding_end_ms)
         rows = [parse_funding_entry(e) for e in entries]
         funding_path = out_dir / f"funding_{args.symbol}.parquet"
         write_funding_parquet(funding_path, rows)

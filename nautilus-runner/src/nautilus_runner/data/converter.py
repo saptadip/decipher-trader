@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from decimal import Decimal
 from typing import Any
 
 from nautilus_trader.model import Bar, BarType, Price, Quantity
 
 MS_TO_NS = 1_000_000
+
+
+def _price(value: str, precision: int) -> Price:
+    return Price.from_decimal_dp(Decimal(value), precision)
+
+
+def _quantity(value: str, precision: int) -> Quantity:
+    return Quantity.from_decimal_dp(Decimal(value), precision)
 
 
 def parse_kline_row(
@@ -21,6 +30,9 @@ def parse_kline_row(
     Row layout (12 cols): open_time_ms, open, high, low, close, volume,
     close_time_ms, quote_volume, count, taker_buy_vol, taker_buy_quote_vol, ignore.
     ``ts_event`` is set to open_time (ns); ``ts_init`` to close_time (ns).
+
+    Values are parsed via ``Decimal`` to preserve exact tick precision — see
+    AGENTS.md ("preserve exact arithmetic for prices, quantities, money, fees").
     """
     if len(row) < 7:
         raise ValueError(f"Kline row must have >= 7 columns, got {len(row)}: {row!r}")
@@ -30,11 +42,11 @@ def parse_kline_row(
 
     return Bar(
         bar_type,
-        Price(float(row[1]), price_precision),
-        Price(float(row[2]), price_precision),
-        Price(float(row[3]), price_precision),
-        Price(float(row[4]), price_precision),
-        Quantity(float(row[5]), size_precision),
+        _price(row[1], price_precision),
+        _price(row[2], price_precision),
+        _price(row[3], price_precision),
+        _price(row[4], price_precision),
+        _quantity(row[5], size_precision),
         open_time_ns,
         close_time_ns,
     )

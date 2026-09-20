@@ -169,3 +169,78 @@ async def test_fetch_funding_returns_empty_when_no_data():
         router.get("/fapi/v1/fundingRate").mock(return_value=httpx.Response(200, json=[]))
         client = BinanceHistoricalClient()
         assert await client.fetch_funding("BTCUSDT", 1, 2) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_advances_cursor_past_last_ts():
+    """After a full page, the next request's startTime must be last_ts + 1 exactly."""
+    last_ts = 1_700_000_000_000 + 999
+    page_a = [
+        {"symbol": "BTCUSDT", "fundingTime": 1_700_000_000_000 + i, "fundingRate": "0.0001", "markPrice": "50000"}
+        for i in range(1000)
+    ]
+
+    async with respx.mock(base_url=FAPI_BASE) as router:
+        route = router.get("/fapi/v1/fundingRate").mock(
+            side_effect=[
+                httpx.Response(200, json=page_a),
+                httpx.Response(200, json=[]),
+            ],
+        )
+        client = BinanceHistoricalClient()
+        got = await client.fetch_funding("BTCUSDT", 1_700_000_000_000, 1_700_000_000_000 + 10_000)
+
+    assert len(got) == 1000
+    assert route.call_count == 2
+    assert int(route.calls[1].request.url.params["startTime"]) == last_ts + 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_breaks_when_full_page_reaches_end_ms():
+    """A full page whose last ts >= end_ms must NOT trigger another request."""
+    end_ms = 1_700_000_000_000 + 999
+    page_a = [
+        {"symbol": "BTCUSDT", "fundingTime": 1_700_000_000_000 + i, "fundingRate": "0.0001", "markPrice": "50000"}
+        for i in range(1000)
+    ]
+
+    async with respx.mock(base_url=FAPI_BASE) as router:
+        route = router.get("/fapi/v1/fundingRate").mock(
+            side_effect=[httpx.Response(200, json=page_a)],
+        )
+        client = BinanceHistoricalClient()
+        got = await client.fetch_funding("BTCUSDT", 1_700_000_000_000, end_ms)
+
+    assert len(got) == 1000
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_propagates_transport_error():
+    async with respx.mock(base_url=FAPI_BASE) as router:
+        router.get("/fapi/v1/fundingRate").mock(side_effect=httpx.ConnectError("boom"))
+        client = BinanceHistoricalClient()
+        with pytest.raises(httpx.ConnectError):
+            await client.fetch_funding("BTCUSDT", 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_fetch_kline_rows_skips_csv_header_row():
+    """Some archives ship with a header row; the extractor must drop it."""
+    header = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "count", "tb_v", "tb_qv", "ignore"]
+    data_row = _kline_row(1_700_000_000_000, 1_700_000_059_999, close="50001.00")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        csv_bytes = "\n".join(",".join(r) for r in [header, data_row]).encode()
+        zf.writestr("BTCUSDT-1m-2026-09.csv", csv_bytes)
+
+    async with respx.mock() as router:
+        router.get(f"{VISION_BASE}/data/futures/um/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-09.zip").mock(
+            return_value=httpx.Response(200, content=buf.getvalue()),
+        )
+        client = BinanceHistoricalClient()
+        got = [row async for row in client.fetch_kline_rows("BTCUSDT", "1m", date(2026, 9, 1), date(2026, 10, 1))]
+
+    assert len(got) == 1
+    assert got[0][4] == "50001.00"

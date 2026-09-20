@@ -44,6 +44,11 @@ def check_bars(
 
     ``interval_ns``: the bar step in nanoseconds (60_000_000_000 for 1m).
     ``max_bar_to_bar_ratio``: flag if abs(prev_close / close) or its reciprocal exceeds this.
+
+    OHLC relational invariants (``high >= low``, ``low <= min(open, close)``,
+    ``high >= max(open, close)``) are enforced by ``nautilus_trader.model.Bar``
+    at construction and cannot reach this function; a bad Binance row raises
+    ``ValueError`` inside ``parse_kline_row`` instead.
     """
     report = IntegrityReport(
         interval_ns=interval_ns,

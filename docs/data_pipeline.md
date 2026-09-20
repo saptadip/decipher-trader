@@ -83,6 +83,15 @@ The run exits non-zero (code `3`) if any check fails, unless
 `--skip-integrity` is set. The full report is always written to
 `integrity_report.json` next to the catalog.
 
+## Current-month archives
+
+Binance publishes each month's ZIP shortly after the month closes. A run whose
+window extends into the current UTC month will 404 the current-month archive
+(the CLI logs a warning and continues) and will typically fail the row-count
+integrity check because the actual row count is short of the expected count.
+Restrict the window to closed months, or pass `--skip-integrity` if you are
+knowingly working with a partial trailing month.
+
 ## Basis caveat
 
 Backtest results measured on Binance data will not translate one-for-one to
