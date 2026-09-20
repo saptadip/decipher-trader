@@ -24,9 +24,18 @@ def send(text: str) -> None:
         if not token or not chat_id:
             return
         with httpx.Client(timeout=5.0) as c:
-            c.post(
+            resp = c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": text},
+            )
+        # httpx doesn't raise on 4xx/5xx by default; log so a silent-drop misconfig
+        # (bad token, wrong chat_id, bot blocked by user) surfaces in `docker logs`
+        # rather than vanishing.
+        if resp.status_code >= 300:
+            log.warning(
+                "telegram alert non-2xx: status=%d body=%s",
+                resp.status_code,
+                resp.text[:200],
             )
     except Exception as e:
         log.warning("telegram alert failed: %s", e)

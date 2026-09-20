@@ -117,12 +117,12 @@ export SMOKE_DATA_DIR=$HOME/.decipher-e2e   # macOS only; skip on Linux
 mkdir -p "$SMOKE_DATA_DIR"
 
 # Scenario A
-docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d --build
 OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) python e2e/chaos.py A
 docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml down
 
 # Scenario B (fresh stack)
-docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml up -d --build
 OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) python e2e/chaos.py B
 docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.chaos.yml down
 ```
@@ -148,12 +148,14 @@ See `e2e/smoke.py`. Requires Docker; drives the full paper→live promotion flow
 
 The bind-mount source and the host-side SQLite path are both controlled by the `SMOKE_DATA_DIR` environment variable (default `/tmp/decipher-e2e`). On **macOS Docker Desktop**, `/tmp` lives inside the Docker VM and is invisible to host Python, so set `SMOKE_DATA_DIR=$HOME/.decipher-e2e` (under `/Users`, which Docker Desktop shares by default). On Linux the default is fine.
 
+The `up` commands include `--build` so any change to a service's `pyproject.toml` / Dockerfile / source since the previous run gets picked up. Without `--build`, docker reuses a cached image and new Python dependencies (e.g. a runtime dep moved from `[dev]` to `[project.dependencies]`) will be missing at runtime.
+
 ```bash
 cp .env.example .env
 # Edit .env: set OPERATOR_TOKEN, HYPERLIQUID_TESTNET_PRIVATE_KEY, HYPERLIQUID_TESTNET_ACCOUNT_ID
 export SMOKE_DATA_DIR=$HOME/.decipher-e2e   # macOS only; skip on Linux
 mkdir -p "$SMOKE_DATA_DIR"
-docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.paper.yml -f e2e/docker-compose.smoke.yml up -d --build
 python3 -m venv /tmp/decipher-e2e-venv
 /tmp/decipher-e2e-venv/bin/pip install httpx
 OPERATOR_TOKEN=$(grep -E '^OPERATOR_TOKEN=' .env | cut -d= -f2) /tmp/decipher-e2e-venv/bin/python e2e/smoke.py
