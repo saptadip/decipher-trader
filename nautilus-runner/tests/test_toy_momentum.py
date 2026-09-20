@@ -689,3 +689,147 @@ def test_max_drawdown_from_pnls_matches_hand_computed_value():
 
     # Cumulative: 10, 15, -5, -2 → peak=15, trough=-5, drawdown=20.
     assert _max_drawdown_from_pnls([10.0, 5.0, -20.0, 3.0]) == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Native-epic 3 tests: flatten in on_stop
+# ---------------------------------------------------------------------------
+
+
+def test_on_stop_flattens_and_cancels():
+    """on_stop calls cancel_all_orders and close_all_positions with instrument_id, then audits."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_clock = MagicMock()
+    mock_audit = MagicMock()
+    mock_cancel = MagicMock()
+    mock_close = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
+        patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_stop()
+
+    mock_cancel.assert_called_once_with(strategy._config.instrument_id)
+    mock_close.assert_called_once_with(strategy._config.instrument_id)
+    mock_audit.post.assert_called_once_with(
+        actor="runner",
+        action="flatten_on_stop",
+        payload={
+            "strategy_id": 42,
+            "instrument": str(strategy._config.instrument_id),
+        },
+    )
+
+
+def test_on_stop_swallows_flatten_errors():
+    """on_stop must not propagate flatten exceptions and must warn via log."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    mock_log = MagicMock()
+    mock_clock = MagicMock()
+    mock_audit = MagicMock()
+    mock_cancel = MagicMock(side_effect=RuntimeError("network down"))
+    mock_close = MagicMock(side_effect=RuntimeError("network down"))
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
+        patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        # Must not raise even though both flatten calls fail.
+        strategy.on_stop()
+
+    assert mock_log.warning.call_count >= 2, (
+        "Expected at least two warnings, one per failed flatten call"
+    )
+    # Audit MUST still fire after both flatten calls fail — operator visibility
+    # into "runner stopped" must survive a network-flaky shutdown.
+    mock_audit.post.assert_called_once()
+
+
+def test_on_stop_still_cancels_timer_when_flatten_fails():
+    """Timer cancel must run before flatten; both flatten calls are attempted regardless of failures.
+
+    Verifies call ordering via mock side_effects that record into a shared list.
+    Both cancel_all_orders and close_all_positions raise; timer_cancel must appear
+    first and both flatten calls must still have been made (warnings prove they ran).
+    """
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy_with_db_id()
+    call_order: list[str] = []
+
+    mock_log = MagicMock()
+    mock_clock = MagicMock()
+    mock_clock.cancel_timer.side_effect = lambda name: call_order.append("timer_cancel")
+    mock_audit = MagicMock()
+
+    def _cancel_side_effect(instrument_id: object) -> None:
+        call_order.append("cancel_all_orders")
+        raise RuntimeError("fail")
+
+    def _close_side_effect(instrument_id: object) -> None:
+        call_order.append("close_all_positions")
+        raise RuntimeError("fail")
+
+    mock_cancel = MagicMock(side_effect=_cancel_side_effect)
+    mock_close = MagicMock(side_effect=_close_side_effect)
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
+        patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_stop()
+
+    # Timer cancel must fire first (before any flatten attempt).
+    assert call_order[0] == "timer_cancel", (
+        f"timer_cancel must run first; got order: {call_order}"
+    )
+    # Both flatten calls were made (exceptions swallowed, warnings emitted).
+    assert "cancel_all_orders" in call_order
+    assert "close_all_positions" in call_order
+    assert mock_log.warning.call_count >= 2
+    # Audit MUST still fire after both flatten calls fail.
+    mock_audit.post.assert_called_once()
+
+
+def test_on_stop_skips_audit_when_no_strategy_db_id():
+    """on_stop must flatten but NOT audit when strategy_db_id is None."""
+    import nautilus_runner.state as state_mod
+
+    strategy = _make_strategy()  # no strategy_db_id → defaults to None
+    mock_log = MagicMock()
+    mock_clock = MagicMock()
+    mock_audit = MagicMock()
+    mock_cancel = MagicMock()
+    mock_close = MagicMock()
+
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "clock", mock_clock, create=True),
+        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
+        patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
+        patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
+        patch.object(state_mod, "audit_writer", mock_audit),
+    ):
+        strategy.on_stop()
+
+    mock_cancel.assert_called_once_with(strategy._config.instrument_id)
+    mock_close.assert_called_once_with(strategy._config.instrument_id)
+    mock_audit.post.assert_not_called()
