@@ -752,8 +752,11 @@ def test_on_stop_swallows_flatten_errors():
         strategy.on_stop()
 
     assert mock_log.warning.call_count >= 2, (
-        "Expected at least one warning per failed flatten call"
+        "Expected at least two warnings, one per failed flatten call"
     )
+    # Audit MUST still fire after both flatten calls fail — operator visibility
+    # into "runner stopped" must survive a network-flaky shutdown.
+    mock_audit.post.assert_called_once()
 
 
 def test_on_stop_still_cancels_timer_when_flatten_fails():
@@ -773,13 +776,6 @@ def test_on_stop_still_cancels_timer_when_flatten_fails():
     mock_clock.cancel_timer.side_effect = lambda name: call_order.append("timer_cancel")
     mock_audit = MagicMock()
 
-    mock_cancel = MagicMock(side_effect=RuntimeError("fail"))
-    mock_close = MagicMock(side_effect=RuntimeError("fail"))
-
-    # Wrap the MagicMocks to also append to call_order before raising.
-    original_cancel_se = mock_cancel.side_effect
-    original_close_se = mock_close.side_effect
-
     def _cancel_side_effect(instrument_id: object) -> None:
         call_order.append("cancel_all_orders")
         raise RuntimeError("fail")
@@ -788,8 +784,8 @@ def test_on_stop_still_cancels_timer_when_flatten_fails():
         call_order.append("close_all_positions")
         raise RuntimeError("fail")
 
-    mock_cancel.side_effect = _cancel_side_effect
-    mock_close.side_effect = _close_side_effect
+    mock_cancel = MagicMock(side_effect=_cancel_side_effect)
+    mock_close = MagicMock(side_effect=_close_side_effect)
 
     with (
         patch.object(ToyMomentum, "log", mock_log),
@@ -809,6 +805,8 @@ def test_on_stop_still_cancels_timer_when_flatten_fails():
     assert "cancel_all_orders" in call_order
     assert "close_all_positions" in call_order
     assert mock_log.warning.call_count >= 2
+    # Audit MUST still fire after both flatten calls fail.
+    mock_audit.post.assert_called_once()
 
 
 def test_on_stop_skips_audit_when_no_strategy_db_id():

@@ -310,8 +310,9 @@ class ToyMomentum(Strategy):
         except Exception:
             self.log.warning("close_all_positions failed during on_stop")
         # Audit the flatten so the operator sees it in the log alongside kill_all.
-        from nautilus_runner import state
-        if state.audit_writer and self._config.strategy_db_id is not None:
+        from nautilus_runner import state  # local import to avoid hard dep in tests
+
+        if state.audit_writer is not None and self._config.strategy_db_id is not None:
             state.audit_writer.post(
                 actor="runner",
                 action="flatten_on_stop",
