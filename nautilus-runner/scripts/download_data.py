@@ -104,6 +104,12 @@ async def _run(args: argparse.Namespace) -> int:
         print("integrity checks failed; pass --skip-integrity to write anyway", file=sys.stderr)
         return 3
 
+    if not bars:
+        # ParquetDataCatalog.write_bars([]) is a no-op that reports success; a
+        # downstream backtest would silently load an empty catalog. Refuse.
+        print("no bars fell inside the requested window; nothing written", file=sys.stderr)
+        return 4
+
     write_bars_to_catalog(out_dir, bars)
     print(f"wrote bars to catalog under {out_dir}", flush=True)
 

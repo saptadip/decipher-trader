@@ -64,10 +64,23 @@ def test_parse_kline_row_rejects_high_below_close():
 
 
 def test_parse_kline_row_uses_decimal_at_higher_precision():
-    """Decimal path preserves 8-dp values (float would round the last digit)."""
-    row = _row(1_700_000_000_000, 1_700_000_059_999, o="0.12345678", h="0.12345678", l="0.12345678", c="0.12345678", v="1.5")
+    """Pins Decimal parsing — value chosen so float64 loses 1 ULP and Decimal does not.
+
+    ``float("99999999.99999999") == 99999999.99999998`` in IEEE-754 double, whereas
+    ``Decimal("99999999.99999999")`` is exact. If ``converter.py`` regresses to
+    ``Price(float(row[i]), precision)`` this assertion will fail.
+    """
+    from decimal import Decimal
+
+    from nautilus_trader.model import Price
+
+    lossy = "99999999.99999999"
+    assert str(Price(float(lossy), 8)) == "99999999.99999998"  # float loses 1 ULP
+    assert str(Price.from_decimal_dp(Decimal(lossy), 8)) == "99999999.99999999"  # Decimal exact
+
+    row = _row(1_700_000_000_000, 1_700_000_059_999, o=lossy, h=lossy, l=lossy, c=lossy, v="1.5")
     bar = parse_kline_row(row, BAR_TYPE, price_precision=8, size_precision=3)
-    assert str(bar.close) == "0.12345678"
+    assert str(bar.close) == lossy
 
 
 def test_parse_kline_rows_streams_bars_in_order():
