@@ -4,6 +4,7 @@ Uses a hand-built synthetic Parquet catalog in ``tmp_path`` and drives the
 real ``BacktestEngine`` end-to-end.
 """
 
+import math
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,7 @@ from nautilus_trader.trading import Strategy
 
 from nautilus_runner.backtest.runner import realized_pnls_from_report, run_backtest
 from nautilus_runner.data.catalog import write_bars_to_catalog
+from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
 
 BAR_TYPE = "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
 INSTRUMENT_ID = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
@@ -167,25 +169,20 @@ def test_realized_pnls_from_report_handles_empty_and_missing_column():
 
 def test_run_backtest_with_toy_momentum_does_not_crash(tmp_path: Path):
     """PR B: ToyMomentum survives BacktestEngine.on_start (was AttributeError before)."""
-    import math
-
-    from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
-
     bt_str = BAR_TYPE
     bt = BarType.from_str(bt_str)
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     start_ns = int(start.timestamp() * 1_000_000_000)
 
-    # 60 hours of oscillating price so the fast/slow MAs can cross and
-    # produce at least a few trade decisions inside the window.
-    from nautilus_trader.model import Bar
+    # 60 hours of oscillating price. math.sin(i / 5) has period ~10 hours,
+    # giving multiple fast (period 3) / slow (period 10) MA crossings inside
+    # the window; a broken strategy that never crosses would emit 0 orders.
     bars = []
     for i in range(60):
         price = 50000.00 + 500 * math.sin(i / 5)
         p = Price(price, 2)
         ts_open = start_ns + i * HOUR_NS
         bars.append(Bar(bt, p, p, p, p, Quantity(1.0, 3), ts_open, ts_open + HOUR_NS - 1))
-    from nautilus_runner.data.catalog import write_bars_to_catalog
     write_bars_to_catalog(tmp_path, bars)
 
     cfg = ToyMomentumConfig(

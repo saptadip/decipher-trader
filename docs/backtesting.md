@@ -77,15 +77,15 @@ caveat in `metrics.py`). Nautilus's own annualized Sharpe and Sortino live under
 
 ## Strategy notes
 
-`ToyMomentum` is backtest-safe as of PR #16. Live-only side effects (socket
-disconnect alerts, audit writer, metrics writer, Telegram) are guarded on
-their module-level singletons; the reconciler timer name now uses
-`self.strategy_id`, which is populated for both `BacktestEngine` and the live
-`LiveNode`. Use `--fast` / `--slow` / `--max-position` / `--max-notional` /
-`--max-daily-loss` to explore its parameter space.
+`ToyMomentum` is backtest-safe as of the Session-2 PR-B change. Live-only
+side effects (socket disconnect alerts, audit writer, metrics writer,
+Telegram) are guarded on their module-level singletons; the reconciler timer
+name now uses `self.strategy_id`, which is populated for both `BacktestEngine`
+and the live `LiveNode`. Use `--fast` / `--slow` / `--max-position` /
+`--max-notional` / `--max-daily-loss` to explore its parameter space.
 
-`ToyMomentum` remains a **demo**: it is a 5/20 MA crossover on 1-minute bars
-and will typically lose to taker fees over long windows. Session 3 will
+`ToyMomentum` remains a **demo**: a fast/slow SMA crossover (defaults 5 / 20)
+that will typically lose to taker fees over long windows. Session 3 will
 introduce strategies designed for real edge; the backtest primitive here is
 the harness they will run in.
 
