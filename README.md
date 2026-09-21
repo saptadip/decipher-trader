@@ -80,6 +80,13 @@ If either variable is empty (the default), alerts are silently disabled — no c
 
 The stale-heartbeat detector polls the audit log every 30 s and fires once per gap (debounced — it will not repeat while the same gap persists, but will re-alert after a recovery and subsequent new outage).
 
+## Historical data pipeline
+
+Session-2 backtesting reads a Nautilus Parquet catalog. Fetch one from Binance
+public data with `nautilus-runner/scripts/download_data.py`. See
+[`docs/data_pipeline.md`](docs/data_pipeline.md) for CLI reference, output
+layout, and the Binance-vs-Hyperliquid basis caveat.
+
 ## Backup and portability
 
 State is in two named docker volumes: `decipher-db` (SQLite) and `decipher-cache` (backtest data). Back up:
