@@ -12,11 +12,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `backtest` is only needed by `scripts/run_backtest.py` (pandas is pulled in
+# transitively by nautilus_trader.analysis.reporter.generate_positions_report).
+# Keeping it out of core deps keeps the live-trading Docker image slim.
+backtest = [
+  "pandas==2.2.3",
+]
 dev = [
   "pytest==8.3.3",
   "pytest-asyncio==0.24.0",
   "respx==0.21.1",
   "ruff==0.6.9",
+  "pandas==2.2.3",
 ]
 
 [build-system]

@@ -87,6 +87,13 @@ public data with `nautilus-runner/scripts/download_data.py`. See
 [`docs/data_pipeline.md`](docs/data_pipeline.md) for CLI reference, output
 layout, and the Binance-vs-Hyperliquid basis caveat.
 
+## Backtesting
+
+Consume a catalog through Nautilus's `BacktestEngine` with realistic fills,
+fees, and slippage via `nautilus-runner/scripts/run_backtest.py`. See
+[`docs/backtesting.md`](docs/backtesting.md) for CLI reference, output shape,
+and the Session-3 baseline-metric targets.
+
 ## Backup and portability
 
 State is in two named docker volumes: `decipher-db` (SQLite) and `decipher-cache` (backtest data). Back up:
