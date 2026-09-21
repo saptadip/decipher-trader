@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Run a single-window backtest from a Nautilus Parquet catalog.
 
-Example:
+Example (buy-and-hold demo):
     uv run python scripts/run_backtest.py \\
         --catalog /tmp/decipher-catalog \\
         --symbol BTCUSDT --interval 1h \\
         --start 2025-06-01 --end 2025-06-08 \\
-        --fast 5 --slow 20 --out /tmp/backtest.json
+        --strategy buy_and_hold --out /tmp/backtest.json
+
+Example (ToyMomentum, MA crossover):
+    uv run python scripts/run_backtest.py \\
+        --catalog /tmp/decipher-catalog \\
+        --symbol BTCUSDT --interval 1h \\
+        --start 2025-06-01 --end 2025-06-08 \\
+        --strategy toy_momentum --fast 3 --slow 10 --out /tmp/backtest.json
 """
 
 from __future__ import annotations
@@ -45,6 +52,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--strategy", choices=STRATEGY_CHOICES, default="buy_and_hold")
     p.add_argument("--trade-size", type=Decimal, default=Decimal("0.001"))
     p.add_argument("--starting-usdt", type=Decimal, default=Decimal("10000"))
+    # ToyMomentum-only hyperparameters (ignored by buy_and_hold).
+    p.add_argument("--fast", type=int, default=5, help="ToyMomentum fast MA period")
+    p.add_argument("--slow", type=int, default=20, help="ToyMomentum slow MA period")
+    p.add_argument("--max-position", type=float, default=0.01, help="ToyMomentum position cap")
+    p.add_argument("--max-notional", type=float, default=1000.0, help="ToyMomentum notional cap")
+    p.add_argument("--max-daily-loss", type=float, default=100.0, help="ToyMomentum daily-loss circuit")
     p.add_argument("--taker-fee", type=Decimal, default=Decimal("0.000180"))
     p.add_argument("--maker-fee", type=Decimal, default=Decimal("0.000200"))
     p.add_argument("--price-precision", type=int, default=2)
@@ -63,6 +76,22 @@ def _build_buy_and_hold(args: argparse.Namespace, bar_type: BarType) -> object:
         size_precision=args.size_precision,
     )
     return BuyAndHold(cfg)
+
+
+def _build_toy_momentum(args: argparse.Namespace, bar_type: BarType) -> object:
+    from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
+
+    cfg = ToyMomentumConfig(
+        instrument_id=InstrumentId.from_str(f"{args.symbol}-PERP.BINANCE"),
+        bar_type=bar_type,
+        trade_size=args.trade_size,
+        max_notional=args.max_notional,
+        max_daily_loss=args.max_daily_loss,
+        max_position=args.max_position,
+        fast_period=args.fast,
+        slow_period=args.slow,
+    )
+    return ToyMomentum(cfg)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,15 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.strategy == "buy_and_hold":
         strategy = _build_buy_and_hold(args, bar_type)
     elif args.strategy == "toy_momentum":
-        # ToyMomentum was written for the live-wired runtime and does not
-        # currently survive BacktestEngine's on_start (see docs/backtesting.md).
-        # Fail with a clear message instead of an engine-startup traceback.
-        print(
-            "toy_momentum is not backtest-safe in rc5 yet; use --strategy buy_and_hold. "
-            "See docs/backtesting.md for the pending adaptation.",
-            file=sys.stderr,
-        )
-        return 2
+        strategy = _build_toy_momentum(args, bar_type)
     else:  # pragma: no cover - defended by argparse `choices`
         raise ValueError(f"unknown strategy: {args.strategy}")
 

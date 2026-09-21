@@ -64,8 +64,12 @@ def test_cli_rejects_non_btcusdt_symbol(tmp_path, capsys):
     assert "ETHUSDT" in err and "BTCUSDT" in err
 
 
-def test_cli_rejects_toy_momentum_strategy(tmp_path, capsys):
-    """--strategy toy_momentum must exit 2 with a clear pending-adaptation message."""
+def test_cli_accepts_toy_momentum_strategy_and_hits_empty_catalog(tmp_path, capsys):
+    """--strategy toy_momentum reaches the runner and returns 3 for an empty catalog.
+
+    PR B made ToyMomentum backtest-safe; the previous "return 2 pending
+    adaptation" guard is gone. An empty catalog still surfaces cleanly as 3.
+    """
     mod = _load_cli_module()
     rc = mod.main(
         [
@@ -77,9 +81,9 @@ def test_cli_rejects_toy_momentum_strategy(tmp_path, capsys):
             "--strategy", "toy_momentum",
         ],
     )
-    assert rc == 2
+    assert rc == 3
     err = capsys.readouterr().err
-    assert "toy_momentum" in err and "buy_and_hold" in err
+    assert "no bars" in err
 
 
 def test_cli_rejects_reversed_window(tmp_path, capsys):

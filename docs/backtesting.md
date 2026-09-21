@@ -44,7 +44,6 @@ Exit codes:
 - `2` — argument validation failure. Emits a stderr message naming the cause:
   - `--end` on or before `--start`
   - `--symbol` other than `BTCUSDT` (only `BTCUSDT-PERP.BINANCE` is wired today)
-  - `--strategy toy_momentum` (not backtest-safe in rc5 yet)
 - `3` — catalog contains zero bars in the requested window; nothing to run.
 
 ## Summary shape
@@ -76,14 +75,19 @@ The `sharpe` and `max_drawdown` fields at the top level are computed by
 caveat in `metrics.py`). Nautilus's own annualized Sharpe and Sortino live under
 `raw_stats.stats_returns` and are also emitted.
 
-## Strategy caveat: `toy_momentum`
+## Strategy notes
 
-`ToyMomentum` was written for live trading and assumes a live-wired runtime
-(socket-state events, audit writer, position reconciliation via the venue).
-Running it inside `BacktestEngine` in rc5 currently fails during strategy
-`on_start`. A follow-up PR will adapt `ToyMomentum` to be backtest-safe; until
-then, use `--strategy buy_and_hold` for smoke tests and Session-3 strategy
-exploration will introduce a purpose-built strategy of its own.
+`ToyMomentum` is backtest-safe as of the Session-2 PR-B change. Live-only
+side effects (socket disconnect alerts, audit writer, metrics writer,
+Telegram) are guarded on their module-level singletons; the reconciler timer
+name now uses `self.strategy_id`, which is populated for both `BacktestEngine`
+and the live `LiveNode`. Use `--fast` / `--slow` / `--max-position` /
+`--max-notional` / `--max-daily-loss` to explore its parameter space.
+
+`ToyMomentum` remains a **demo**: a fast/slow SMA crossover (defaults 5 / 20)
+that will typically lose to taker fees over long windows. Session 3 will
+introduce strategies designed for real edge; the backtest primitive here is
+the harness they will run in.
 
 ## Baseline metrics (targets for Session 3)
 

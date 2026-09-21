@@ -354,9 +354,6 @@ def test_on_start_seeds_signed_position_from_portfolio():
         patch.object(
             ToyMomentum, "subscribe_socket_state", mock_subscribe_socket_state
         ),
-        # self.id is a Nautilus base-class attribute set during full runtime init;
-        # not available on a bare pyo3 ToyMomentum instance under unit test.
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
     ):
         strategy.on_start()
@@ -371,6 +368,12 @@ def test_on_start_seeds_signed_position_from_portfolio():
     # C1 wiring: without subscribe_socket_state, on_socket_state is dead code in live.
     mock_subscribe_bars.assert_called_once()
     mock_subscribe_socket_state.assert_called_once()
+    # PR-B fix: reconciler timer name must derive from Nautilus's own StrategyId
+    # (self.strategy_id), not the non-existent self.id.
+    mock_clock.set_timer.assert_called_once()
+    timer_name = mock_clock.set_timer.call_args.kwargs["name"]
+    assert timer_name.startswith("reconciler-"), f"unexpected timer name: {timer_name!r}"
+    assert str(strategy.strategy_id) in timer_name
 
 
 def test_on_start_no_audit_when_venue_flat():
@@ -392,7 +395,6 @@ def test_on_start_no_audit_when_venue_flat():
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
         patch.object(ToyMomentum, "subscribe_bars", MagicMock()),
         patch.object(ToyMomentum, "subscribe_socket_state", MagicMock()),
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
     ):
         strategy.on_start()
@@ -652,7 +654,6 @@ def test_on_stop_flattens_and_cancels():
     with (
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
         patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
@@ -669,6 +670,11 @@ def test_on_stop_flattens_and_cancels():
             "instrument": str(strategy._config.instrument_id),
         },
     )
+    # PR-B fix: cancel_timer name must derive from Nautilus's own StrategyId
+    # (self.strategy_id) so it matches the name set_timer used in on_start.
+    mock_clock.cancel_timer.assert_called_once()
+    cancel_name = mock_clock.cancel_timer.call_args[0][0]
+    assert cancel_name == f"reconciler-{strategy.strategy_id}"
 
 
 def test_on_stop_swallows_flatten_errors():
@@ -685,7 +691,6 @@ def test_on_stop_swallows_flatten_errors():
     with (
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
         patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
@@ -732,7 +737,6 @@ def test_on_stop_still_cancels_timer_when_flatten_fails():
     with (
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
         patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
@@ -765,7 +769,6 @@ def test_on_stop_skips_audit_when_no_strategy_db_id():
     with (
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "clock", mock_clock, create=True),
-        patch.object(ToyMomentum, "id", "TEST-STRATEGY-ID", create=True),
         patch.object(ToyMomentum, "cancel_all_orders", mock_cancel, create=True),
         patch.object(ToyMomentum, "close_all_positions", mock_close, create=True),
         patch.object(state_mod, "audit_writer", mock_audit),
