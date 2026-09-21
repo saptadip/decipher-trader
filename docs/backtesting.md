@@ -7,10 +7,11 @@ and raw Nautilus stats.
 
 ## Prerequisites
 
-`nautilus-runner`'s `.venv` includes `pyarrow` and `pandas`. Sync once:
+`pandas` lives in the `backtest` optional-dependencies group so live-trading
+containers stay lean. Sync it in alongside dev deps for the runner:
 
 ```bash
-cd nautilus-runner && uv sync --extra dev
+cd nautilus-runner && uv sync --extra dev --extra backtest
 ```
 
 ## Run a backtest

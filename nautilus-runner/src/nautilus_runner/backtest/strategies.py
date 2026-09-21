@@ -52,6 +52,11 @@ class BuyAndHold(Strategy):
             )
 
     def on_stop(self) -> None:
-        # Close any remaining position on shutdown.
-        if not self.portfolio.is_net_flat(self._cfg.instrument_id):
-            self.close_all_positions(self._cfg.instrument_id)
+        # Close any remaining position on shutdown. Wrap the venue call in
+        # try/except to mirror ToyMomentum.on_stop — a shutdown error must not
+        # mask the primary reason the engine is stopping.
+        try:
+            if not self.portfolio.is_net_flat(self._cfg.instrument_id):
+                self.close_all_positions(self._cfg.instrument_id)
+        except Exception:
+            self.log.exception("BuyAndHold: close_all_positions failed on stop")

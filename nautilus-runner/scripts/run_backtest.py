@@ -106,10 +106,30 @@ def main(argv: list[str] | None = None) -> int:
     bar_type_str = f"{args.symbol}-PERP.BINANCE-{spec}-LAST-EXTERNAL"
     bar_type = BarType.from_str(bar_type_str)
 
+    # The instrument factory hard-codes BTCUSDT-PERP.BINANCE (see
+    # nautilus_runner.backtest.instrument.build_btcusdt_perp). Running with any
+    # other --symbol would silently mismatch the strategy's instrument_id with
+    # the engine's registered instrument; fail loudly instead.
+    if args.symbol != "BTCUSDT":
+        print(
+            f"--symbol {args.symbol} is not supported by this CLI; only BTCUSDT is wired. "
+            "See docs/backtesting.md for the pending multi-symbol follow-up.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.strategy == "buy_and_hold":
         strategy = _build_buy_and_hold(args, bar_type)
     elif args.strategy == "toy_momentum":
-        strategy = _build_toy_momentum(args, bar_type)
+        # ToyMomentum was written for the live-wired runtime and does not
+        # currently survive BacktestEngine's on_start (see docs/backtesting.md).
+        # Fail with a clear message instead of an engine-startup traceback.
+        print(
+            "toy_momentum is not backtest-safe in rc5 yet; use --strategy buy_and_hold. "
+            "See docs/backtesting.md for the pending adaptation.",
+            file=sys.stderr,
+        )
+        return 2
     else:  # pragma: no cover - defended by argparse `choices`
         raise ValueError(f"unknown strategy: {args.strategy}")
 

@@ -13,7 +13,7 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Price, Quantity
 from nautilus_trader.trading import Strategy
 
-from nautilus_runner.backtest.runner import run_backtest
+from nautilus_runner.backtest.runner import realized_pnls_from_report, run_backtest
 from nautilus_runner.data.catalog import write_bars_to_catalog
 
 BAR_TYPE = "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
@@ -131,6 +131,33 @@ def test_run_backtest_records_at_least_one_trade(tmp_path: Path):
     # Final balance moves with realized PnL; both must agree to within cents.
     delta = summary.final_balance - summary.initial_balance
     assert abs(delta - summary.realized_pnl_total) < Decimal("0.01")
+
+
+def test_realized_pnls_from_report_parses_money_strings():
+    """Nautilus formats realized_pnl as ``"<amount> <CURRENCY>"``. Verify parse."""
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "realized_pnl": [
+                "-0.08001800 USDT",
+                "1.06101508 USDT",
+                "0.00000000 USDT",
+                None,
+                "bogus USDT",  # unparseable numeric part
+            ],
+        },
+    )
+    out = realized_pnls_from_report(df)
+    assert out == [-0.08001800, 1.06101508, 0.0]
+
+
+def test_realized_pnls_from_report_handles_empty_and_missing_column():
+    import pandas as pd
+
+    assert realized_pnls_from_report(None) == []
+    assert realized_pnls_from_report(pd.DataFrame()) == []
+    assert realized_pnls_from_report(pd.DataFrame({"other": [1]})) == []
 
 
 def test_run_backtest_summary_serializes_to_dict(tmp_path: Path):

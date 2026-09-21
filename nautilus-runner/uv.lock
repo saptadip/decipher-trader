@@ -109,7 +109,6 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "nautilus-trader" },
-    { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -117,7 +116,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+backtest = [
+    { name = "pandas" },
+]
 dev = [
+    { name = "pandas" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "respx" },
@@ -128,7 +131,8 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = "==0.27.2" },
     { name = "nautilus-trader", specifier = "==2.0.0rc5" },
-    { name = "pandas", specifier = "==2.2.3" },
+    { name = "pandas", marker = "extra == 'backtest'", specifier = "==2.2.3" },
+    { name = "pandas", marker = "extra == 'dev'", specifier = "==2.2.3" },
     { name = "pyarrow", specifier = "==25.0.1" },
     { name = "pydantic", specifier = "==2.9.2" },
     { name = "pydantic-settings", specifier = "==2.5.2" },
@@ -138,7 +142,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.6.9" },
     { name = "websockets", specifier = "==13.1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["backtest", "dev"]
 
 [[package]]
 name = "nautilus-trader"
