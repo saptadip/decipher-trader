@@ -133,8 +133,10 @@ def test_run_backtest_records_at_least_one_trade(tmp_path: Path):
     assert abs(delta - summary.realized_pnl_total) < Decimal("0.01")
 
 
-def test_realized_pnls_from_report_parses_money_strings():
-    """Nautilus formats realized_pnl as ``"<amount> <CURRENCY>"``. Verify parse."""
+def test_realized_pnls_from_report_parses_money_strings(caplog):
+    """Nautilus formats realized_pnl as ``"<amount> <CURRENCY>"``. Verify parse + WARN."""
+    import logging
+
     import pandas as pd
 
     df = pd.DataFrame(
@@ -144,12 +146,15 @@ def test_realized_pnls_from_report_parses_money_strings():
                 "1.06101508 USDT",
                 "0.00000000 USDT",
                 None,
-                "bogus USDT",  # unparseable numeric part
+                "bogus USDT",  # unparseable numeric part → must WARN, not drop silently
             ],
         },
     )
-    out = realized_pnls_from_report(df)
+    with caplog.at_level(logging.WARNING, logger="nautilus_runner.backtest.runner"):
+        out = realized_pnls_from_report(df)
+
     assert out == [-0.08001800, 1.06101508, 0.0]
+    assert any("unparseable realized_pnl" in rec.message for rec in caplog.records)
 
 
 def test_realized_pnls_from_report_handles_empty_and_missing_column():

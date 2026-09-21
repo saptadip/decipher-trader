@@ -43,12 +43,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--start", required=True, help="YYYY-MM-DD (UTC, inclusive)")
     p.add_argument("--end", required=True, help="YYYY-MM-DD (UTC, exclusive)")
     p.add_argument("--strategy", choices=STRATEGY_CHOICES, default="buy_and_hold")
-    p.add_argument("--fast", type=int, default=5)
-    p.add_argument("--slow", type=int, default=20)
     p.add_argument("--trade-size", type=Decimal, default=Decimal("0.001"))
-    p.add_argument("--max-position", type=float, default=0.01)
-    p.add_argument("--max-notional", type=float, default=1000.0)
-    p.add_argument("--max-daily-loss", type=float, default=100.0)
     p.add_argument("--starting-usdt", type=Decimal, default=Decimal("10000"))
     p.add_argument("--taker-fee", type=Decimal, default=Decimal("0.000180"))
     p.add_argument("--maker-fee", type=Decimal, default=Decimal("0.000200"))
@@ -65,31 +60,9 @@ def _build_buy_and_hold(args: argparse.Namespace, bar_type: BarType) -> object:
         instrument_id=InstrumentId.from_str(f"{args.symbol}-PERP.BINANCE"),
         bar_type=bar_type,
         trade_size=args.trade_size,
+        size_precision=args.size_precision,
     )
     return BuyAndHold(cfg)
-
-
-def _build_toy_momentum(args: argparse.Namespace, bar_type: BarType) -> object:
-    """Build a ToyMomentum instance for backtest.
-
-    NOTE: ToyMomentum was written for live mode; some of its ``on_start`` path
-    assumes a live-wired runtime and does not survive the backtest engine's
-    startup sequence in rc5. Kept as a strategy option so a follow-up PR can
-    adapt it without an API break — pending, do not rely on it here.
-    """
-    from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
-
-    cfg = ToyMomentumConfig(
-        instrument_id=InstrumentId.from_str(f"{args.symbol}-PERP.BINANCE"),
-        bar_type=bar_type,
-        trade_size=args.trade_size,
-        max_notional=args.max_notional,
-        max_daily_loss=args.max_daily_loss,
-        max_position=args.max_position,
-        fast_period=args.fast,
-        slow_period=args.slow,
-    )
-    return ToyMomentum(cfg)
 
 
 def main(argv: list[str] | None = None) -> int:

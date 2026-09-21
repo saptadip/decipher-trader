@@ -45,3 +45,55 @@ def test_every_interval_produces_a_valid_bar_type():
 def test_strategy_choices_is_non_empty():
     mod = _load_cli_module()
     assert "toy_momentum" in mod.STRATEGY_CHOICES
+
+
+def test_cli_rejects_non_btcusdt_symbol(tmp_path, capsys):
+    """--symbol other than BTCUSDT must exit 2 before touching the engine."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "ETHUSDT",
+            "--interval", "1h",
+            "--start", "2025-06-01",
+            "--end", "2025-06-08",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "ETHUSDT" in err and "BTCUSDT" in err
+
+
+def test_cli_rejects_toy_momentum_strategy(tmp_path, capsys):
+    """--strategy toy_momentum must exit 2 with a clear pending-adaptation message."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT",
+            "--interval", "1h",
+            "--start", "2025-06-01",
+            "--end", "2025-06-08",
+            "--strategy", "toy_momentum",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "toy_momentum" in err and "buy_and_hold" in err
+
+
+def test_cli_rejects_reversed_window(tmp_path, capsys):
+    """--end on or before --start must exit 2."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT",
+            "--interval", "1h",
+            "--start", "2025-06-08",
+            "--end", "2025-06-01",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "must be after" in err

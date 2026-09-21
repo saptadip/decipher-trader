@@ -41,7 +41,10 @@ Arguments:
 Exit codes:
 
 - `0` — backtest ran and a summary was written.
-- `2` — `--end` on or before `--start`.
+- `2` — argument validation failure. Emits a stderr message naming the cause:
+  - `--end` on or before `--start`
+  - `--symbol` other than `BTCUSDT` (only `BTCUSDT-PERP.BINANCE` is wired today)
+  - `--strategy toy_momentum` (not backtest-safe in rc5 yet)
 - `3` — catalog contains zero bars in the requested window; nothing to run.
 
 ## Summary shape

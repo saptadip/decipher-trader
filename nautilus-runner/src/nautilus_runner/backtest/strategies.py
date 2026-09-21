@@ -47,7 +47,10 @@ class BuyAndHold(Strategy):
                 self.order_factory.market(
                     instrument_id=self._cfg.instrument_id,
                     order_side=OrderSide.BUY,
-                    quantity=Quantity(float(self._cfg.trade_size), self._cfg.size_precision),
+                    quantity=Quantity.from_decimal_dp(
+                        self._cfg.trade_size,
+                        self._cfg.size_precision,
+                    ),
                 ),
             )
 
