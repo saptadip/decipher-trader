@@ -5,66 +5,13 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-import statistics
-
 from nautilus_trader.common import SocketStateChanged, SocketState, TimeEvent
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId, OrderSide, Quantity
 from nautilus_trader.model import PositionChanged
 from nautilus_trader.trading import Strategy
 
-
-def _sharpe_from_pnls(realized_pnls: list[float]) -> float:
-    """Compute per-trade Sharpe ratio from a realized PnL history.
-
-    ``nautilus_trader.analysis.SharpeRatio.calculate_from_realized_pnls`` returns
-    ``None`` in rc5 (the pnl path is not yet implemented in the Rust port), so we
-    implement the formula directly: mean(pnl) / std(pnl).
-
-    Returns 0.0 when fewer than two data points are available (std dev undefined)
-    or when stdev is exactly 0.0 (all trades identical PnL). The exact ``== 0.0``
-    check is intentional; near-equal-float PnLs from floating-point arithmetic
-    are out of scope for this MVP (real trades never produce bit-identical values).
-
-    TODO: replace with nautilus_trader.analysis.SharpeRatio.calculate_from_realized_pnls
-    when the rc5 Rust path is implemented upstream.
-    """
-    if len(realized_pnls) < 2:
-        return 0.0
-    mean = statistics.mean(realized_pnls)
-    stdev = statistics.stdev(realized_pnls)
-    if stdev == 0.0:
-        return 0.0
-    return mean / stdev
-
-
-def _max_drawdown_from_pnls(realized_pnls: list[float]) -> float:
-    """Compute cumulative peak-to-trough drawdown from a realized PnL history.
-
-    ``nautilus_trader.analysis.MaxDrawdown.calculate_from_realized_pnls`` returns
-    ``None`` in rc5 (the pnl path is not yet implemented in the Rust port), so we
-    implement the formula directly: tracks the running cumulative PnL curve and
-    returns the maximum observed drop from a peak as a non-negative value.
-
-    Initial peak = 0.0 so a strategy that starts with a losing trade correctly
-    reports a positive drawdown from zero. Returns 0.0 when history is empty.
-
-    TODO: replace with nautilus_trader.analysis.MaxDrawdown.calculate_from_realized_pnls
-    when the rc5 Rust path is implemented upstream.
-    """
-    if not realized_pnls:
-        return 0.0
-    peak = 0.0
-    max_dd = 0.0
-    cumulative = 0.0
-    for pnl in realized_pnls:
-        cumulative += pnl
-        if cumulative > peak:
-            peak = cumulative
-        dd = peak - cumulative  # positive: loss from the running peak
-        if dd > max_dd:
-            max_dd = dd
-    return max_dd
+from nautilus_runner.metrics import max_drawdown_from_pnls, sharpe_from_pnls
 
 
 def would_breach_position_cap(
@@ -365,8 +312,8 @@ class ToyMomentum(Strategy):
         if state.metrics is None or self._config.strategy_db_id is None:
             return
 
-        sharpe = _sharpe_from_pnls(self._realized_pnl_history)
-        max_drawdown = _max_drawdown_from_pnls(self._realized_pnl_history)
+        sharpe = sharpe_from_pnls(self._realized_pnl_history)
+        max_drawdown = max_drawdown_from_pnls(self._realized_pnl_history)
 
         state.metrics.post_metric(
             strategy_id=self._config.strategy_db_id,

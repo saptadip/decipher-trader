@@ -9,6 +9,7 @@ dependencies = [
   "pydantic==2.9.2",
   "pydantic-settings==2.5.2",
   "pyarrow==25.0.1",
+  "pandas==2.2.3",
 ]
 
 [project.optional-dependencies]
