@@ -165,6 +165,53 @@ def test_realized_pnls_from_report_handles_empty_and_missing_column():
     assert realized_pnls_from_report(pd.DataFrame({"other": [1]})) == []
 
 
+def test_run_backtest_with_toy_momentum_does_not_crash(tmp_path: Path):
+    """PR B: ToyMomentum survives BacktestEngine.on_start (was AttributeError before)."""
+    import math
+
+    from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
+
+    bt_str = BAR_TYPE
+    bt = BarType.from_str(bt_str)
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    start_ns = int(start.timestamp() * 1_000_000_000)
+
+    # 60 hours of oscillating price so the fast/slow MAs can cross and
+    # produce at least a few trade decisions inside the window.
+    from nautilus_trader.model import Bar
+    bars = []
+    for i in range(60):
+        price = 50000.00 + 500 * math.sin(i / 5)
+        p = Price(price, 2)
+        ts_open = start_ns + i * HOUR_NS
+        bars.append(Bar(bt, p, p, p, p, Quantity(1.0, 3), ts_open, ts_open + HOUR_NS - 1))
+    from nautilus_runner.data.catalog import write_bars_to_catalog
+    write_bars_to_catalog(tmp_path, bars)
+
+    cfg = ToyMomentumConfig(
+        instrument_id=INSTRUMENT_ID,
+        bar_type=bt,
+        trade_size=Decimal("0.001"),
+        max_notional=1000.0,
+        max_daily_loss=100.0,
+        max_position=0.01,
+        fast_period=3,
+        slow_period=10,
+    )
+    summary = run_backtest(
+        catalog_path=tmp_path,
+        bar_type=bt_str,
+        strategy=ToyMomentum(cfg),
+        start=start,
+        end=start.replace(day=3, hour=12),  # 60 hours later
+    )
+    assert summary.n_bars == 60
+    assert summary.raw_stats["total_orders"] >= 2  # at least one open + close
+    # ToyMomentum trades a signed position; total_positions is >= 1 when the
+    # fast MA crosses the slow MA at least once inside the window.
+    assert summary.n_trades >= 1
+
+
 def test_run_backtest_summary_serializes_to_dict(tmp_path: Path):
     _write_trending_catalog(tmp_path, n_hours=24, start=datetime(2025, 1, 1, tzinfo=timezone.utc))
     summary = run_backtest(

@@ -107,10 +107,12 @@ class ToyMomentum(Strategy):
                 )
         self._signed_position = seeded
         # Schedule the 5-min reconciler on the Nautilus event loop thread.
-        # Use Nautilus's own StrategyId (self.id) so the timer name is unique across
-        # any multi-strategy runner without depending on strategy_db_id being set.
+        # Use Nautilus's own StrategyId so the timer name is unique across any
+        # multi-strategy runner without depending on strategy_db_id being set.
+        # ``self.strategy_id`` is the rc5 property; ``self.id`` is unset in
+        # BacktestEngine's on_start path.
         self.clock.set_timer(
-            name=f"reconciler-{self.id}",
+            name=f"reconciler-{self.strategy_id}",
             interval=_RECONCILE_INTERVAL,
             callback=self._reconcile,
         )
@@ -328,7 +330,7 @@ class ToyMomentum(Strategy):
         # Defensive: cancel the reconciler timer so a hypothetical restart of
         # the same strategy instance doesn't hit a duplicate-registration error.
         try:
-            self.clock.cancel_timer(f"reconciler-{self.id}")
+            self.clock.cancel_timer(f"reconciler-{self.strategy_id}")
         except Exception:
             pass
         # Flatten before shutdown: cancel any outstanding orders and close open
