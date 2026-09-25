@@ -101,3 +101,33 @@ on the backtest catalog:
 
 The `buy_and_hold` demo does not meet these targets — it is only for
 plumbing verification.
+
+## Walk-forward evaluator
+
+Rolling train + test backtests over a wider window, one iteration per step.
+Each iteration produces a `WalkForwardWindow` with a train `BacktestSummary`
+and an out-of-sample test `BacktestSummary`.
+
+```bash
+cd nautilus-runner
+uv run python scripts/walk_forward.py \
+  --catalog /tmp/decipher-catalog \
+  --symbol BTCUSDT --interval 1h \
+  --start 2025-01-01 --end 2025-07-01 \
+  --strategy toy_momentum --fast 3 --slow 10 \
+  --train-months 3 --test-months 1 --step-months 1 \
+  --out /tmp/walk-forward.json
+```
+
+Extra arguments beyond `run_backtest`:
+
+- `--train-months` — length of each train window (default 3).
+- `--test-months` — length of each out-of-sample test window (default 1).
+- `--step-months` — step between successive train_start dates (default 1).
+
+Additional exit code: `4` — the requested range does not fit at least one
+`(train_months + test_months)` window.
+
+In this release the strategy runs with fixed parameters on both windows;
+Session 3 will plug a parameter search over the train window and evaluate
+the winning parameters on the test window.
