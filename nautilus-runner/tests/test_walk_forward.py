@@ -289,4 +289,6 @@ def test_walk_forward_calls_factory_twice_per_window(tmp_path: Path):
     assert len(instances) == 2 * len(result.windows)
     # All returned instances must be distinct objects — a regression that reused
     # one instance across the two runs would violate Nautilus's no-re-attach rule.
+    # The ``instances`` list keeps every reference live for the duration of this
+    # assertion, so ``id()`` cannot be reused via garbage collection.
     assert len({id(s) for s in instances}) == len(instances)

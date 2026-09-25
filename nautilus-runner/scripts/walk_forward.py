@@ -169,9 +169,10 @@ def main(argv: list[str] | None = None) -> int:
             instrument=instrument,
         )
     except ValueError as exc:
-        # Reachable only from run_backtest's empty-window guard now that month
-        # args are pre-validated above; the message therefore always describes
-        # a data-absence condition ("no bars for ... in window ...").
+        # Reachable only from run_backtest's empty-window guard as long as the
+        # CLI pre-checks above stay in place (start/end ordering and month
+        # args >= 1). Under those invariants the message always describes a
+        # data-absence condition ("no bars for ... in window ...").
         print(f"walk-forward refused: {exc}", file=sys.stderr)
         return 3
 
