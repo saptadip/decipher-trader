@@ -13,12 +13,25 @@ The caller supplies a ``strategy_factory: Callable[[], Strategy]`` that
 returns a fresh strategy per invocation. Nautilus does not permit re-attaching
 a stopped strategy instance, so both the train and the test run of each
 window build a brand new one.
+
+Session-3 signature note
+------------------------
+
+When the parameter-search evaluator lands, the natural shape becomes something
+like ``Callable[[WalkForwardContext], Strategy]`` where the context carries the
+window phase (``"train" | "test"``), the window bounds, and — for the test
+call — the ``train_summary`` from the just-completed train run. Rather than
+pick that shape now for a use case that has not been scoped, the current
+``Callable[[], Strategy]`` is deliberately narrow. Session 3 will either
+extend this API in a compatible way (defaulting the context arg) or introduce
+a new entry-point next to ``walk_forward``; do not commit to the extension
+here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path

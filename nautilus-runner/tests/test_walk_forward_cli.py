@@ -71,6 +71,70 @@ def test_cli_rejects_non_btcusdt_symbol(tmp_path, capsys):
     assert "ETHUSDT" in err and "BTCUSDT" in err
 
 
+def test_cli_rejects_zero_or_negative_month_args(tmp_path, capsys):
+    """--train-months / --test-months / --step-months < 1 must exit 2 (arg validation),
+    not 3 (data absence). Argparse's ``int`` accepts 0 and negatives; the CLI
+    pre-validates so the exit-code contract is preserved."""
+    mod = _load_cli_module()
+    for flag in ("--train-months", "--test-months", "--step-months"):
+        rc = mod.main(
+            [
+                "--catalog", str(tmp_path),
+                "--symbol", "BTCUSDT",
+                "--interval", "1h",
+                "--start", "2025-01-01",
+                "--end", "2025-07-01",
+                flag, "0",
+            ],
+        )
+        assert rc == 2, f"expected exit 2 for {flag} 0, got {rc}"
+        err = capsys.readouterr().err
+        assert f"{flag} must be >= 1" in err
+
+
+def test_cli_exits_3_when_window_has_no_bars(tmp_path, capsys):
+    """A catalog whose bars fall inside window 0 but not window 1 must exit 3."""
+    import math
+    from datetime import datetime, timezone
+
+    from nautilus_trader.model import Bar, BarType, Price, Quantity
+
+    from nautilus_runner.data.catalog import write_bars_to_catalog
+
+    # Seed only January bars. Walk-forward with train=1m + test=1m + step=1m
+    # over a Jan..Mar range yields one window (train Jan..Feb, test Feb..Mar).
+    # The test-window catalog lookup returns [], so run_backtest raises
+    # ValueError and the CLI must surface exit 3.
+    bar_type = "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
+    bt = BarType.from_str(bar_type)
+    hour_ns = 60 * 60 * 1_000_000_000
+    jan_start = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    bars = []
+    for i in range(24 * 31):  # 744 hourly bars, all of Jan
+        price = 50000.00 + 100 * math.sin(i / 24)
+        p = Price(price, 2)
+        ts_open = jan_start + i * hour_ns
+        bars.append(Bar(bt, p, p, p, p, Quantity(1.0, 3), ts_open, ts_open + hour_ns - 1))
+    write_bars_to_catalog(tmp_path, bars)
+
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT",
+            "--interval", "1h",
+            "--start", "2025-01-01",
+            "--end", "2025-03-01",
+            "--train-months", "1",
+            "--test-months", "1",
+            "--step-months", "1",
+        ],
+    )
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "no bars" in err and "walk-forward refused" in err
+
+
 def test_cli_exits_4_when_no_windows_fit(tmp_path, capsys):
     """train=3m + test=1m needs a 4-month range minimum. A 2-month range yields 0 windows."""
     mod = _load_cli_module()

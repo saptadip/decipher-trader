@@ -125,8 +125,16 @@ Extra arguments beyond `run_backtest`:
 - `--test-months` — length of each out-of-sample test window (default 1).
 - `--step-months` — step between successive train_start dates (default 1).
 
-Additional exit code: `4` — the requested range does not fit at least one
-`(train_months + test_months)` window.
+Exit codes:
+
+- `0` — one or more windows produced; JSON result written.
+- `2` — argument validation failure. Same causes as `run_backtest.py`, plus
+  any of `--train-months` / `--test-months` / `--step-months` being less than 1.
+- `3` — the catalog is empty for at least one window in the walk (not just the
+  overall range). This aborts the whole run rather than skipping the window,
+  because a mid-range gap invalidates the surrounding OOS comparison.
+- `4` — the requested range does not fit at least one
+  `(train_months + test_months)` window.
 
 In this release the strategy runs with fixed parameters on both windows;
 Session 3 will plug a parameter search over the train window and evaluate

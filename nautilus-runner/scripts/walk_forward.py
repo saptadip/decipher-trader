@@ -124,6 +124,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # Argument-validation vs data-absence exit codes must stay distinct:
+    # month args < 1 is bad input (exit 2); an empty catalog window is data
+    # absence (exit 3). iter_windows raises ValueError for both, so pre-check
+    # month args here to keep the two paths from collapsing into exit 3.
+    for name, value in (
+        ("--train-months", args.train_months),
+        ("--test-months", args.test_months),
+        ("--step-months", args.step_months),
+    ):
+        if value < 1:
+            print(f"{name} must be >= 1; got {value}", file=sys.stderr)
+            return 2
+
     spec = INTERVAL_TO_BAR_SPEC[args.interval]
     bar_type_str = f"{args.symbol}-PERP.BINANCE-{spec}-LAST-EXTERNAL"
     bar_type = BarType.from_str(bar_type_str)
@@ -156,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
             instrument=instrument,
         )
     except ValueError as exc:
+        # Reachable only from run_backtest's empty-window guard now that month
+        # args are pre-validated above; the message therefore always describes
+        # a data-absence condition ("no bars for ... in window ...").
         print(f"walk-forward refused: {exc}", file=sys.stderr)
         return 3
 

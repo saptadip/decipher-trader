@@ -214,7 +214,7 @@ def test_walk_forward_produces_windows_with_train_and_test_summaries(tmp_path: P
         assert w.test_summary.raw_stats["total_orders"] >= 1
 
 
-def test_walk_forward_result_serializes_to_dict(tmp_path: Path):
+def test_walk_forward_empty_result_serializes_to_dict(tmp_path: Path):
     start = datetime(2025, 1, 1, tzinfo=UTC)
     _write_synthetic_catalog(tmp_path, start, n_hours=24 * 40)
 
@@ -231,3 +231,62 @@ def test_walk_forward_result_serializes_to_dict(tmp_path: Path):
     assert result.windows == []  # 1m train + 1m test needs 2m of range; only 1m given
     d = result.to_dict()
     assert d == {"n_windows": 0, "windows": []}
+
+
+def test_walk_forward_non_empty_result_serializes_to_dict(tmp_path: Path):
+    """Non-empty ``to_dict()`` must produce ISO strings + stringified Decimals."""
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    _write_synthetic_catalog(tmp_path, start, n_hours=24 * 31 * 3)
+
+    result = walk_forward(
+        catalog_path=tmp_path,
+        bar_type=BAR_TYPE,
+        strategy_factory=_buy_and_hold_factory(BAR_TYPE),
+        start=start,
+        end=datetime(2025, 3, 1, tzinfo=UTC),
+        train_months=1,
+        test_months=1,
+        step_months=1,
+    )
+    assert len(result.windows) == 1
+    d = result.to_dict()
+    assert d["n_windows"] == 1
+    w0 = d["windows"][0]
+    assert w0["train_start"] == "2025-01-01T00:00:00+00:00"
+    assert w0["train_end"] == "2025-02-01T00:00:00+00:00"
+    assert w0["test_start"] == "2025-02-01T00:00:00+00:00"
+    assert w0["test_end"] == "2025-03-01T00:00:00+00:00"
+    # BacktestSummary serialization: Decimals rendered as strings, not floats.
+    assert isinstance(w0["train_summary"]["initial_balance"], str)
+    assert isinstance(w0["test_summary"]["realized_pnl_total"], str)
+
+
+def test_walk_forward_calls_factory_twice_per_window(tmp_path: Path):
+    """Fresh-instance-per-run contract: factory called ``2 * n_windows`` times with distinct returns."""
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    _write_synthetic_catalog(tmp_path, start, n_hours=24 * 31 * 4)
+
+    base_factory = _buy_and_hold_factory(BAR_TYPE)
+    instances: list[object] = []
+
+    def tracking_factory():
+        s = base_factory()
+        instances.append(s)
+        return s
+
+    result = walk_forward(
+        catalog_path=tmp_path,
+        bar_type=BAR_TYPE,
+        strategy_factory=tracking_factory,
+        start=start,
+        end=datetime(2025, 4, 1, tzinfo=UTC),
+        train_months=1,
+        test_months=1,
+        step_months=1,
+    )
+    # windows: (Jan..Feb, Feb..Mar), (Feb..Mar, Mar..Apr) → 2 windows × 2 runs = 4
+    assert len(result.windows) == 2
+    assert len(instances) == 2 * len(result.windows)
+    # All returned instances must be distinct objects — a regression that reused
+    # one instance across the two runs would violate Nautilus's no-re-attach rule.
+    assert len({id(s) for s in instances}) == len(instances)
