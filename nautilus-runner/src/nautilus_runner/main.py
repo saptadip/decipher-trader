@@ -10,10 +10,9 @@ from nautilus_trader.adapters.hyperliquid import (
     HyperliquidExecutionClientConfig,
     HyperliquidExecutionClientFactory,
 )
-from nautilus_trader.common import Clock, Environment
+from nautilus_trader.common import Environment
 from nautilus_trader.live import LiveExecutionEngineConfig, LiveNode, LiveRiskEngineConfig
 from nautilus_trader.model import AccountId, BarType, InstrumentId, StrategyId, TraderId
-from nautilus_trader.persistence import StreamingFeatherWriter
 
 from nautilus_runner import state
 from nautilus_runner.config import (
@@ -124,27 +123,26 @@ def main() -> None:
 
     node = _build_node(settings, rows)
 
-    # Attach a StreamingFeatherWriter so every Nautilus event (orders, fills,
-    # positions, bars, etc.) is persisted to Feather (Arrow-IPC) files under the
-    # catalog path. `StreamingConfig` IS importable in rc5 but is backtest-only —
-    # no `LiveNodeBuilder.with_streaming_config`, no `LiveNodeConfig.streaming` — so
-    # we wire the standalone `StreamingFeatherWriter` which subscribes to Nautilus's
-    # global thread-local message bus.
+    # Live-mode trade-event persistence via StreamingFeatherWriter is disabled
+    # in rc5. Its `subscribe()` installs a msgbus callback whose internal Rust
+    # path calls `Tokio::block_on()`; when the callback fires from inside the
+    # LiveNode's Tokio runtime, the nested block_on collides with the outer
+    # runtime and panics ("Cannot start a runtime from within a runtime",
+    # crates/persistence/src/backend/feather.rs:1038). Reproduced with
+    # RUST_BACKTRACE=full: panics fire with an `include_types=[]` filter,
+    # a bogus filter, and immediately at data-client connect regardless of
+    # subscription content. Runner boots fully once `subscribe()` is disabled
+    # (verified end-to-end: mass status, portfolio init, trader started).
     #
-    # Clock caveat: `LiveClock` is not user-constructable from Python in rc5, so we
-    # pass `Clock.new_test()`. That clock never advances, which makes the writer's
-    # `flush_interval_ms` timer-based flush a permanent no-op. Persistence therefore
-    # depends on the explicit `feather_writer.close()` call after `node.run()` — see
-    # the shutdown block below. `flush_interval_ms` is set to 0 as documentation that
-    # the timer path is not the persistence mechanism here.
-    feather_writer = StreamingFeatherWriter(
-        path=settings.streaming_catalog_path,
-        cache=node.cache,
-        clock=Clock.new_test(),
-        fs_protocol="file",
-        flush_interval_ms=0,
-    )
-    feather_writer.subscribe()
+    # Restoration path (tracked in the PROGRESS.md "Nautilus 2.0 stable" note):
+    # swap for `StreamingConfig` wired on `LiveNodeBuilder` once Nautilus 2.0
+    # stable exposes it — rc5 has the config class but no LiveNode wiring. Until
+    # then, trade history can be reconstructed from the control-plane audit log
+    # + venue API history if needed.
+    #
+    # `settings.streaming_catalog_path` is still read+mkdir'd above so the env
+    # var stays validated and the volume mount remains asserted — swapping to
+    # `StreamingConfig` later needs the same catalog directory.
 
     stop_event = asyncio.Event()
     ws_url = (
@@ -189,13 +187,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sig)
 
     node.run()
-    # C1+C2: flush + finalize the Feather buffers to disk BEFORE returning. Without
-    # this call, the writer's in-memory Arrow buffers are silently abandoned on
-    # graceful stop (see clock caveat on the StreamingFeatherWriter above).
-    try:
-        feather_writer.close()
-    except Exception:
-        pass  # best-effort — never break shutdown on a write finalize failure
+    # No feather_writer.close() here — the writer is disabled in rc5 (see the
+    # comment block above `node = _build_node(...)` for the panic reproduction).
     loop.call_soon_threadsafe(stop_event.set)
 
 
