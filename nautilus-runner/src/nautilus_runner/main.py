@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from decimal import Decimal
+
+logger = logging.getLogger(__name__)
 
 from nautilus_trader.adapters.hyperliquid import (
     HyperliquidDataClientConfig,
@@ -143,6 +146,11 @@ def main() -> None:
     # `settings.streaming_catalog_path` is still read+mkdir'd above so the env
     # var stays validated and the volume mount remains asserted — swapping to
     # `StreamingConfig` later needs the same catalog directory.
+    logger.warning(
+        "live trade-event Feather persistence disabled on Nautilus rc5 "
+        "(StreamingFeatherWriter.subscribe() panics inside the LiveNode Tokio "
+        "runtime); restore via StreamingConfig on LiveNodeBuilder under 2.0 stable"
+    )
 
     stop_event = asyncio.Event()
     ws_url = (
