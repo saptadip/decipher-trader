@@ -63,6 +63,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # ToyMomentum-only hyperparameters (ignored by buy_and_hold).
     p.add_argument("--fast", type=int, default=5, help="ToyMomentum fast MA period")
     p.add_argument("--slow", type=int, default=20, help="ToyMomentum slow MA period")
+    p.add_argument("--atr-period", type=int, default=14, help="ToyMomentum ATR window")
+    p.add_argument(
+        "--vol-filter-min-atr-pct",
+        type=float,
+        default=None,
+        help="ToyMomentum vol filter: minimum ATR%% of price to open from flat (None disables)",
+    )
     p.add_argument("--max-position", type=float, default=0.01, help="position cap (ToyMomentum / FundingReversion)")
     p.add_argument("--max-notional", type=float, default=1000.0, help="notional cap (ToyMomentum / FundingReversion)")
     p.add_argument("--max-daily-loss", type=float, default=100.0, help="daily-loss circuit (ToyMomentum / FundingReversion)")
@@ -133,6 +140,8 @@ def _make_toy_momentum_factory(args: argparse.Namespace, bar_type: BarType):
                 max_position=args.max_position,
                 fast_period=args.fast,
                 slow_period=args.slow,
+                atr_period=args.atr_period,
+                vol_filter_min_atr_pct=args.vol_filter_min_atr_pct,
             )
         )
 

@@ -36,6 +36,7 @@ Arguments:
 - `--starting-usdt` — venue account starting balance (USDT).
 - `--taker-fee` / `--maker-fee` — override the Binance USDM tier-0 defaults (18 bps taker, 20 bps maker).
 - `--fast` / `--slow` / `--trade-size` / `--max-position` / `--max-notional` / `--max-daily-loss` — `toy_momentum` hyperparameters (ignored by `buy_and_hold`).
+- `--atr-period` / `--vol-filter-min-atr-pct` — `toy_momentum` volatility filter (`--vol-filter-min-atr-pct` defaults to unset, filter disabled). When set, a new position is opened from flat only if the ATR-over-close-percentage over the last `--atr-period` bars is at or above the threshold; exits and flips out of an existing position are always allowed so the strategy is not trapped on the wrong side during a low-vol regime.
 - `--out` — write the JSON summary to a file; the summary is also printed to stdout.
 
 Exit codes:

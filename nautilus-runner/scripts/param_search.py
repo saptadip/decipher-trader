@@ -71,6 +71,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # ToyMomentum grid (ignored by buy_and_hold; buy_and_hold uses --trade-size-grid).
     p.add_argument("--fast-grid", type=_parse_int_grid, default=[5], help="comma-separated fast MA periods")
     p.add_argument("--slow-grid", type=_parse_int_grid, default=[20], help="comma-separated slow MA periods")
+    p.add_argument("--atr-period", type=int, default=14, help="ToyMomentum ATR window (fixed, not gridded)")
+    p.add_argument(
+        "--vol-filter-min-atr-pct-grid",
+        type=_parse_float_grid,
+        default=[0.0],
+        help="comma-separated ToyMomentum ATR%% thresholds; 0.0 disables the filter for that combo",
+    )
     p.add_argument("--max-position", type=float, default=0.01, help="ToyMomentum position cap (fixed)")
     p.add_argument("--max-notional", type=float, default=1000.0, help="ToyMomentum notional cap (fixed)")
     p.add_argument("--max-daily-loss", type=float, default=100.0, help="ToyMomentum daily-loss (fixed)")
@@ -91,7 +98,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _build_grid(args: argparse.Namespace) -> dict[str, list]:
     if args.strategy == "toy_momentum":
-        return {"fast": args.fast_grid, "slow": args.slow_grid}
+        return {
+            "fast": args.fast_grid,
+            "slow": args.slow_grid,
+            "vol_filter_min_atr_pct": args.vol_filter_min_atr_pct_grid,
+        }
     if args.strategy == "buy_and_hold":
         return {"trade_size": [str(x) for x in args.trade_size_grid]}
     if args.strategy == "funding_reversion":
@@ -123,6 +134,10 @@ def _make_strategy_from_params(args: argparse.Namespace, bar_type: BarType):
         from strategies.toy_momentum.strategy import ToyMomentum, ToyMomentumConfig
 
         def _make(params: dict):
+            # 0.0 in the grid is the sentinel for "filter disabled" so the axis
+            # stays in float space; the strategy expects None for disabled.
+            raw = params["vol_filter_min_atr_pct"]
+            vol_min = None if raw == 0.0 else raw
             return ToyMomentum(
                 ToyMomentumConfig(
                     instrument_id=instrument_id,
@@ -133,6 +148,8 @@ def _make_strategy_from_params(args: argparse.Namespace, bar_type: BarType):
                     max_position=args.max_position,
                     fast_period=params["fast"],
                     slow_period=params["slow"],
+                    atr_period=args.atr_period,
+                    vol_filter_min_atr_pct=vol_min,
                 )
             )
 
@@ -210,6 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     _GRID_OWNERS = {
         "--fast-grid": ("toy_momentum", args.fast_grid, [5]),
         "--slow-grid": ("toy_momentum", args.slow_grid, [20]),
+        "--vol-filter-min-atr-pct-grid": (
+            "toy_momentum",
+            args.vol_filter_min_atr_pct_grid,
+            [0.0],
+        ),
         "--trade-size-grid": ("buy_and_hold", args.trade_size_grid, [Decimal("0.001")]),
         "--entry-threshold-grid": ("funding_reversion", args.entry_threshold_grid, [0.001]),
         "--exit-threshold-grid": ("funding_reversion", args.exit_threshold_grid, [0.0001]),
@@ -236,6 +258,13 @@ def main(argv: list[str] | None = None) -> int:
         if bad:
             print(
                 f"invalid ToyMomentum grid: slow must exceed fast; offending pairs: {bad}",
+                file=sys.stderr,
+            )
+            return 2
+        if any(v < 0 for v in args.vol_filter_min_atr_pct_grid):
+            print(
+                "invalid ToyMomentum grid: --vol-filter-min-atr-pct-grid must all be >= 0"
+                " (0.0 = filter disabled)",
                 file=sys.stderr,
             )
             return 2
