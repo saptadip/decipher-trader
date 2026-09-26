@@ -54,8 +54,8 @@ class ToyMomentumConfig(StrategyConfig):
         self.atr_period = atr_period
         # None disables the filter; otherwise it is the minimum ATR/close ratio
         # (as a percentage of price) required to open a NEW position from flat.
-        # Exits and flips-through-flat are always allowed so the strategy is not
-        # trapped on the wrong side when volatility collapses.
+        # Exits toward flat are always allowed so the strategy is not trapped
+        # on the wrong side when volatility collapses.
         self.vol_filter_min_atr_pct = vol_filter_min_atr_pct
         # Optional: DB row id for metrics emission; passed as **_kwargs by _build_node.
         self.strategy_db_id: int | None = _kwargs.get("strategy_db_id")
@@ -250,11 +250,13 @@ class ToyMomentum(Strategy):
         want_long = fast_ma > slow_ma
         trade_qty = float(self._config.trade_size)
 
-        # Volatility filter: only gate NEW positions opened from flat. Exits and
-        # flips (reducing an existing position) are always allowed so a low-vol
-        # regime never traps the strategy on the wrong side of an MA flip.
+        # Volatility filter: only gate NEW positions opened from flat. Exits
+        # toward flat (reducing an existing position) are always allowed so a
+        # low-vol regime never traps the strategy on the wrong side of an MA
+        # flip. Flat tolerance is derived from trade_size so a future config
+        # with sub-satoshi sizing cannot silently misclassify positions as flat.
         vol_min = self._config.vol_filter_min_atr_pct
-        is_flat = abs(self._signed_position) < 1e-12
+        is_flat = abs(self._signed_position) < 0.5 * float(self._config.trade_size)
         if vol_min is not None and is_flat:
             atr_pct = self._atr_pct()
             if atr_pct is None or atr_pct < vol_min:

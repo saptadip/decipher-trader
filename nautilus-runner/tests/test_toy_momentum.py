@@ -990,7 +990,12 @@ def test_config_rejects_atr_period_below_two():
 
 
 def test_atr_pct_matches_hand_computed_value():
-    """ATR% equals mean(TR) / last_close * 100 over the rolling window."""
+    """ATR% equals mean(TR) / last_close * 100 over the rolling window.
+
+    Uses distinct O/H/L/C so each of the three TR branches
+    (high-low, |high-prev_close|, |low-prev_close|) wins on a different bar,
+    catching a wrong branch or missing abs() that a flat-OHLC test would miss.
+    """
     strategy = _make_strategy_with_vol_filter(
         vol_filter_min_atr_pct=0.0,  # ATR still computed; filter disabled effectively
         atr_period=3,
@@ -1000,18 +1005,44 @@ def test_atr_pct_matches_hand_computed_value():
     mock_order_factory.market.return_value = MagicMock()
     mock_submit_order = MagicMock()
 
-    # Bars with close = prev_close ± known amount, all OHLC flat per bar so
-    # TR = |close - prev_close|. Sequence 100, 101, 103, 106 → TR = 1, 2, 3.
-    # After bar 4, window is full: ATR = (1+2+3)/3 = 2.0, close=106, ATR% = 2/106*100.
-    prices = [100.0, 101.0, 103.0, 106.0]
+    bar_type = strategy._config.bar_type
+
+    def _bar(open_p: float, high: float, low: float, close: float, ts: int) -> Bar:
+        return Bar(
+            bar_type,
+            Price.from_str(f"{open_p:.1f}"),
+            Price.from_str(f"{high:.1f}"),
+            Price.from_str(f"{low:.1f}"),
+            Price.from_str(f"{close:.1f}"),
+            Quantity.from_str("1.0"),
+            ts,
+            ts,
+        )
+
+    # Bar 0 seeds prev_close = 100. No TR appended for the first bar. Nautilus
+    # Bar enforces low <= open,close <= high on construction, so each bar
+    # observes those invariants.
+    # Bar 1: prev=100. O=100 H=110 L=95 C=100 → H-L=15, |H-prev|=10, |L-prev|=5. TR=15 (H-L wins).
+    # Bar 2: prev=100. O=112 H=115 L=112 C=113 → H-L=3, |H-prev|=15, |L-prev|=12. TR=15 (|H-prev| wins).
+    # Bar 3: prev=113. O=105 H=108 L=100 C=105 → H-L=8, |H-prev|=5, |L-prev|=13. TR=13 (|L-prev| wins).
+    # atr_period=3, TR window = [15, 15, 13] → mean=14.333..., last_close=105 → 13.650...%.
+    bars = [
+        _bar(100.0, 100.0, 100.0, 100.0, 0),
+        _bar(100.0, 110.0, 95.0, 100.0, 1),
+        _bar(112.0, 115.0, 112.0, 113.0, 2),
+        _bar(105.0, 108.0, 100.0, 105.0, 3),
+    ]
     with (
         patch.object(ToyMomentum, "log", mock_log),
         patch.object(ToyMomentum, "order_factory", mock_order_factory),
         patch.object(ToyMomentum, "submit_order", mock_submit_order),
     ):
-        _feed_bars(strategy, prices)
+        for bar in bars:
+            strategy.on_bar(bar)
 
-    assert strategy._atr_pct() == pytest.approx(2.0 / 106.0 * 100.0, rel=1e-6)
+    expected_atr = (15.0 + 15.0 + 13.0) / 3.0
+    expected_pct = expected_atr / 105.0 * 100.0
+    assert strategy._atr_pct() == pytest.approx(expected_pct, rel=1e-6)
 
 
 def test_vol_filter_blocks_open_from_flat_when_atr_pct_low():

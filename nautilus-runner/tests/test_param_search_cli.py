@@ -101,6 +101,15 @@ def test_shared_flag_defaults_agree_across_all_three_clis():
     assert ps_d["entry_threshold_grid"] == [rb_d["entry_threshold"]]
     assert ps_d["exit_threshold_grid"] == [rb_d["exit_threshold"]]
 
+    # ToyMomentum vol-filter surface: --atr-period is shared as a scalar across
+    # all three CLIs; --vol-filter-min-atr-pct is scalar on rb+wf (default None
+    # = filter disabled) and gridded on ps (default [0.0], where 0.0 is the
+    # in-grid sentinel that maps to None inside _make_strategy_from_params).
+    assert rb_d["atr_period"] == wf_d["atr_period"] == ps_d["atr_period"] == 14
+    assert rb_d["vol_filter_min_atr_pct"] is None
+    assert wf_d["vol_filter_min_atr_pct"] is None
+    assert ps_d["vol_filter_min_atr_pct_grid"] == [0.0]
+
 
 def test_every_interval_produces_a_valid_bar_type():
     mod = _load_cli_module()
@@ -232,6 +241,40 @@ def test_cli_rejects_toy_momentum_grid_flag_under_buy_and_hold(tmp_path, capsys)
     assert rc == 2
     err = capsys.readouterr().err
     assert "--fast-grid" in err and "toy_momentum" in err
+
+
+def test_cli_rejects_vol_filter_grid_under_wrong_strategy(tmp_path, capsys):
+    """--vol-filter-min-atr-pct-grid on buy_and_hold would silently no-op; refuse."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "buy_and_hold",
+            "--vol-filter-min-atr-pct-grid", "0.5,1.0",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--vol-filter-min-atr-pct-grid" in err and "toy_momentum" in err
+
+
+def test_cli_rejects_negative_vol_filter_grid(tmp_path, capsys):
+    """Negative --vol-filter-min-atr-pct-grid values are rejected before any engine spin."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "toy_momentum",
+            "--vol-filter-min-atr-pct-grid", "0.5,-0.1",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--vol-filter-min-atr-pct-grid" in err and ">= 0" in err
 
 
 def test_cli_rejects_buy_and_hold_grid_flag_under_toy_momentum(tmp_path, capsys):
