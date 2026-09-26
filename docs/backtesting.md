@@ -139,3 +139,51 @@ Exit codes:
 In this release the strategy runs with fixed parameters on both windows;
 Session 3 will plug a parameter search over the train window and evaluate
 the winning parameters on the test window.
+
+## Parameter-search grid
+
+Wraps the walk-forward evaluator with an outer loop over hyperparameter
+combinations. Per window, the combo with the highest train-window Sharpe
+becomes the winner; the winner's out-of-sample test summary is the
+scorecard.
+
+```bash
+cd nautilus-runner
+uv run python scripts/param_search.py \
+  --catalog /tmp/decipher-catalog \
+  --symbol BTCUSDT --interval 1h \
+  --start 2025-01-01 --end 2025-07-01 \
+  --strategy toy_momentum \
+  --fast-grid 3,5,10 --slow-grid 20,50 \
+  --train-months 3 --test-months 1 --step-months 1 \
+  --out /tmp/param-search.json
+```
+
+Grid flags:
+
+- `--fast-grid` / `--slow-grid` — comma-separated ToyMomentum MA periods.
+- `--trade-size-grid` — comma-separated `BuyAndHold` order sizes.
+
+Cost note: for a grid of P combos and W windows, this runs `P * W * 2`
+engine spins (each window is train + test). Keep grids small during
+exploration; a 6-combo × 6-window sweep is ~72 spins.
+
+Selection criterion: default is highest ``sharpe_from_pnls`` on the train
+summary. Note that the per-trade Sharpe collapses to 0.0 on any combo with
+fewer than two trades (Nautilus's early-return in
+``nautilus_runner.metrics.sharpe_from_pnls``) or when all trades share an
+identical PnL. On low-turnover strategies this produces a lot of ties at
+0.0 and ``max()`` picks the first combo by insertion order — an
+operator-visible bias toward low-turnover local optima. The Python API
+accepts a custom ``selector`` callable (``BacktestSummary -> float``) —
+e.g. ``lambda s: s.realized_pnl_total`` (raw PnL after fees) or
+``lambda s: -s.max_drawdown`` (smallest drawdown wins). Selector return
+values must be finite; ``NaN`` / ``inf`` produce undefined winner selection.
+The CLI does not expose the selector today; call the module directly from
+Python to override.
+
+Exit codes: same as `walk_forward.py` (0/2/3/4), plus:
+
+- `2` — additionally rejects ToyMomentum grids where any `(fast, slow)` pair
+  has `slow <= fast` (ToyMomentumConfig itself asserts on construction;
+  the CLI fails earlier with a friendlier message).
