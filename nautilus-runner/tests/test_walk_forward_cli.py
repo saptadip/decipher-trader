@@ -135,6 +135,27 @@ def test_cli_exits_3_when_window_has_no_bars(tmp_path, capsys):
     assert "no bars" in err and "walk-forward refused" in err
 
 
+def test_cli_accepts_funding_reversion_strategy_and_hits_empty_catalog(tmp_path, capsys):
+    """--strategy funding_reversion reaches the runner; empty catalog → exit 3."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT",
+            "--interval", "1h",
+            "--start", "2025-01-01",
+            "--end", "2025-03-01",
+            "--strategy", "funding_reversion",
+            "--train-months", "1",
+            "--test-months", "1",
+            "--step-months", "1",
+        ],
+    )
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "no bars" in err and "walk-forward refused" in err
+
+
 def test_cli_exits_4_when_no_windows_fit(tmp_path, capsys):
     """train=3m + test=1m needs a 4-month range minimum. A 2-month range yields 0 windows."""
     mod = _load_cli_module()

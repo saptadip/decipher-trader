@@ -64,6 +64,24 @@ def test_cli_rejects_non_btcusdt_symbol(tmp_path, capsys):
     assert "ETHUSDT" in err and "BTCUSDT" in err
 
 
+def test_cli_accepts_funding_reversion_strategy_and_hits_empty_catalog(tmp_path, capsys):
+    """--strategy funding_reversion reaches the runner; empty catalog surfaces as 3."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT",
+            "--interval", "1h",
+            "--start", "2025-06-01",
+            "--end", "2025-06-08",
+            "--strategy", "funding_reversion",
+        ],
+    )
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "no bars" in err
+
+
 def test_cli_accepts_toy_momentum_strategy_and_hits_empty_catalog(tmp_path, capsys):
     """--strategy toy_momentum reaches the runner and returns 3 for an empty catalog.
 

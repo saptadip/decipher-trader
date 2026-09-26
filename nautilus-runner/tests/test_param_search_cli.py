@@ -87,6 +87,20 @@ def test_shared_flag_defaults_agree_across_all_three_clis():
             f"{flag} default drifts: walk_forward={wf_d[flag]!r} param_search={ps_d[flag]!r}"
         )
 
+    # FundingReversion scalar defaults must agree between run_backtest + walk_forward.
+    # (param_search exposes the same values as single-element grid defaults, checked
+    # separately below.)
+    for flag in ("entry_threshold", "exit_threshold"):
+        assert rb_d[flag] == wf_d[flag], (
+            f"{flag} default drifts: run_backtest={rb_d[flag]!r} walk_forward={wf_d[flag]!r}"
+        )
+
+    # param_search grid defaults must be a single-element list wrapping the scalar
+    # default from the other two CLIs — otherwise the grid version silently
+    # disagrees with the point version for the same operator invocation.
+    assert ps_d["entry_threshold_grid"] == [rb_d["entry_threshold"]]
+    assert ps_d["exit_threshold_grid"] == [rb_d["exit_threshold"]]
+
 
 def test_every_interval_produces_a_valid_bar_type():
     mod = _load_cli_module()
@@ -134,6 +148,73 @@ def test_cli_rejects_zero_month_args(tmp_path, capsys):
     )
     assert rc == 2
     assert "--train-months must be >= 1" in capsys.readouterr().err
+
+
+def test_cli_accepts_funding_reversion_strategy_and_hits_empty_catalog(tmp_path, capsys):
+    """--strategy funding_reversion reaches the runner; empty catalog → exit 3."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-03-01",
+            "--strategy", "funding_reversion",
+            "--train-months", "1", "--test-months", "1", "--step-months", "1",
+        ],
+    )
+    assert rc == 3
+
+
+def test_cli_rejects_funding_grid_under_wrong_strategy(tmp_path, capsys):
+    """--entry-threshold-grid under toy_momentum must exit 2 (silent-ignore guard)."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "toy_momentum",
+            "--entry-threshold-grid", "0.001,0.002",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--entry-threshold-grid" in err and "funding_reversion" in err
+
+
+def test_cli_rejects_toy_momentum_grid_under_funding_reversion(tmp_path, capsys):
+    """--fast-grid under funding_reversion must exit 2."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "funding_reversion",
+            "--fast-grid", "3,5",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--fast-grid" in err and "toy_momentum" in err
+
+
+def test_cli_rejects_funding_reversion_exit_ge_entry_grid(tmp_path, capsys):
+    """FundingReversionConfig asserts exit < entry; CLI fails earlier with friendly msg."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "funding_reversion",
+            "--entry-threshold-grid", "0.001",
+            "--exit-threshold-grid", "0.002",  # exit > entry → illegal pair
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "exit_threshold must be strictly less" in err
 
 
 def test_cli_rejects_toy_momentum_grid_flag_under_buy_and_hold(tmp_path, capsys):

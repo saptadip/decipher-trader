@@ -89,6 +89,29 @@ that will typically lose to taker fees over long windows. Session 3 will
 introduce strategies designed for real edge; the backtest primitive here is
 the harness they will run in.
 
+## Available strategies
+
+- **`buy_and_hold`** — buys one position on the first bar, closes on stop.
+  Minimum viable strategy for plumbing verification. Not for edge hunting.
+- **`toy_momentum`** — fast/slow SMA crossover (defaults 5 / 20). Live-mode
+  ready. Long-established demo; typically loses to taker fees over long
+  windows on crypto majors.
+- **`funding_reversion`** — takes the opposite side of the crowded flow at
+  extreme perpetual funding, exits on mean-reversion toward zero. Funding
+  data is loaded from `<catalog>/funding_{SYMBOL}.parquet` (produced by
+  `download_data.py --funding`). Empty funding file → strategy runs without
+  trading and logs a warning. Params: `--entry-threshold` (|rate| that
+  triggers entry), `--exit-threshold` (|rate| that triggers exit).
+  Grid-search flags: `--entry-threshold-grid`, `--exit-threshold-grid`.
+
+  **Empirical note (2025 H1 6-month window):** funding on BTCUSDT was
+  unusually quiet (`|rate|` stayed under 0.000122 for the whole window,
+  vs. 0.001+ typical during 2021 bull / 2022 crash regimes). A tuned
+  6-combo grid × 3 walk-forward windows produced ~20-25 OOS trades per
+  window and net PnL of **−0.90 USDT** — the hypothesis was falsified for
+  this specific quiet regime. Retest on a longer catalog spanning 2021-2024
+  before writing off the edge class.
+
 ## Baseline metrics (targets for Session 3)
 
 Session 3 will only consider a strategy candidate promotable when it produces
