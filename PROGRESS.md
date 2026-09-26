@@ -1,6 +1,6 @@
 # decipher-trader — Session progress + resume guide
 
-Last updated: 2026-09-21 (post-Session-2-PR-B merge). HEAD: `bd47d10` on `origin/main`.
+Last updated: 2026-09-26 (post-PR #23 merge). HEAD: `69da5b6` on `origin/main`. Open PR: **#24** (docs-only wider-grid retest) on branch `momentum-4h-wider-grid` — includes this PROGRESS.md refresh; ready to merge.
 
 Use this file to resume work in a **new Claude Code session**. Section [How to use this file](#how-to-use-this-file-in-a-new-session) at the bottom has step-by-step.
 
@@ -43,6 +43,14 @@ Autonomous overnight-safety stack is **complete**. Bot boots, runs on Hyperliqui
 | #14 | Session 1: Binance historical downloader → Nautilus Parquet catalog | `8ba9b26` |
 | #15 | Session 2 PR A: single-window backtest driver on top of the catalog | `e5d7ad2` |
 | #16 | Session 2 PR B: ToyMomentum backtest-safety (self.id → self.strategy_id) | `bd47d10` |
+| #17 | Session 2: disable StreamingFeatherWriter (rc5 Tokio-nest panic) | `c454fef` |
+| #18 | Session 2 PR C: walk-forward evaluator on top of `run_backtest` | `88ba6f8` |
+| #19 | Session 2 PR D: parameter-search grid on top of `walk_forward` | `e17875d` |
+| #20 | Session 3 opener: FundingReversion strategy + funding_loader + CLI wiring | `4135e48` |
+| #21 | Retest FundingReversion on 3-year Binance catalog — hypothesis rejected | `902dc53` |
+| #22 | Add Hyperliquid data source + venue-agnostic runner; funding-reversion retest — rejected there too | `8253a46` |
+| #23 | Retest ToyMomentum on 4h bars over 3 years — weak positive (+$54 OOS, Sharpe 0.10, fee-tolerant) | `69da5b6` |
+| **#24 (open)** | Grid-sensitivity study on Momentum4h — parameter search cannot rescue thin edge | `momentum-4h-wider-grid` branch |
 
 ---
 
@@ -129,16 +137,65 @@ Suggested arc (multi-session):
 - **PR A (done)** — `run_backtest(catalog_path, bar_type, strategy, start, end)` on top of Nautilus `BacktestEngine`. `BTCUSDT-PERP.BINANCE` `CryptoPerpetual` factory (Binance USDM tier-0 fees), `MakerTakerFeeModel`, bars via `ParquetDataCatalog.query_bars`. Returns `BacktestSummary` (realized PnL, Sharpe, max drawdown, raw Nautilus stats). CLI at `scripts/run_backtest.py` with `--strategy buy_and_hold` (default) and `--strategy toy_momentum` (fail-fast, pending adaptation). Money and Quantity go through `Decimal` end-to-end. `nautilus_runner.metrics` (`sharpe_from_pnls`, `max_drawdown_from_pnls`) extracted from `strategies/toy_momentum/strategy.py`. `pandas==2.2.3` in a `backtest` optional-dep group. Verified E2E: 168 hourly BTCUSDT bars 2025-06-01 to 2025-06-08 → 1 closed position, +1.06 USDT realized PnL, annualized Sharpe 1.28. Runner suite 91 → 109.
 - **PR B (done at `bd47d10`)** — ToyMomentum runs cleanly under `BacktestEngine`. Single root cause was `self.id` (never exposed by rc5 `Strategy`) → `self.strategy_id` at strategy.py:113,333. All other live-only side effects were already guarded on None module-level singletons. CLI un-gated with the full ToyMomentum hyperparameter surface. E2E: 168 hourly BTCUSDT bars 2025-06-01 to 2025-06-08 → 19 trades, -0.96 USDT (matches "demo loses to fees" narrative). Runner 109 → 110. Live-mode paper revalidation still pending — the pre-PR `self.id` was almost certainly broken in live too. Follow-up tickets: wall-clock `datetime.now(...).date()` daily-loss reset in `on_bar`; CLI-level `slow > fast` argparse validation.
 - **PR C (done at PR #18)** — walk-forward evaluator on top of `run_backtest`. `iter_windows` yields `(train_start, train_end, test_start, test_end)` tuples with month-aligned rolls; `walk_forward(catalog, bar_type, strategy_factory, start, end, train_months, test_months, step_months)` runs a fresh strategy per phase (Nautilus won't accept re-attached instances). CLI at `scripts/walk_forward.py` with exit codes 0 / 2 / 3 / 4 and full parity vs `run_backtest.py` on strategy + instrument flags. Verified E2E: 6 months of hourly BTCUSDT (2025-01-01 to 2025-07-01), ToyMomentum fast=3/slow=10 OOS PnL +5.08 / -12.49 / -10.58 USDT (matches "demo loses to fees"). Runner suite 113 → 134.
-- **PR D (next, optional)** — parameter-search grid harness on top of `walk_forward` (grow the factory shape from `Callable[[], Strategy]` to a phase/context-aware callable; per `walk_forward.py` module docstring).
+- **PR D (done at #19)** — parameter-search grid on top of `walk_forward`. `walk_forward_search()` runs a fresh `walk_forward` per combo, picks per-window winner by selector (default: highest train `sharpe_from_pnls`). Runner 134 → 154. CLI `scripts/param_search.py` with `--fast-grid` / `--slow-grid` (ToyMomentum), `--trade-size-grid` (BuyAndHold), `--entry-threshold-grid` / `--exit-threshold-grid` (FundingReversion). Wrong-strategy grid rejection via `_GRID_OWNERS`.
 - **Baseline metrics** (targets for Session 3 candidates, not this session): Sharpe > 1, max drawdown < 20%, ≥ 500 trades, positive edge after 5 bps taker fee.
 
-### Session 3: Strategy exploration
-- **Candidates** (research each):
-  - Momentum on larger timeframe (1h bars, 20/50 MA).
-  - Mean-reversion on funding rate divergence.
-  - Cross-exchange spread (Hyperliquid vs. Binance perp) — needs second exchange adapter, out of scope for MVP.
-  - Volatility breakout (Bollinger / Keltner).
-- Backtest each on the data pipeline. Pick winner(s).
+### Session 3 (in progress): Strategy exploration
+
+Empirical logs live per strategy: `docs/strategy_notes/<strategy>.md` (newest at top).
+
+**Strategies tested so far:**
+
+| Strategy | Best result | Fee erosion | Verdict |
+|---|---|---|---|
+| `buy_and_hold` | plumbing verification only | n/a | n/a |
+| `toy_momentum` @ 1m Binance | −$18 net OOS | high | loses to fees |
+| `funding_reversion` @ 1h Binance, 3y (PR #21) | −$0.29 net OOS | ~100% | **rejected** — fee-slaughter |
+| `funding_reversion` @ 1h Hyperliquid, 6mo (PR #22) | +$11.41 / Sharpe 0.045 (zero-fee ceiling +$21.60) | ~50% | **rejected** — signal itself is trivial |
+| `toy_momentum` @ 4h Binance, 3y baseline grid (PR #23) | **+$54.43 net OOS**, Sharpe 0.065, fee erosion ~5% | ~5% | **first non-underwater strategy**; not promotable (Sharpe << 1, 303 trades < 500) |
+| `toy_momentum` @ 4h wider grid (PR #24 open) | +$15.44 / Sharpe −0.11 (worse) | — | wider grid HURTS |
+| `toy_momentum` @ 4h dense grid (PR #24 open) | +$50.10 / Sharpe +0.013 (tie) | — | dense grid ties on PnL, loses on Sharpe |
+
+**Consolidated learning:** Momentum4h edge on 3y BTCUSDT is real but caps at ~$54 OOS after fees regardless of grid density. Parameter search cannot rescue thin signal. `fast=12, slow=24` is the stable modal winner. Max drawdown across all Momentum4h test runs = 0.15% of capital — well under 20% G7 ceiling. **Signal is the bottleneck, not drawdown or grid tuning.**
+
+**Next actionable direction (PR J when session resumes):** volatility filter on `ToyMomentum`. Losses cluster in choppy 2022-2023 windows; a Bollinger-band gate / ATR minimum that skips low-vol regimes should raise Sharpe by pruning chop losses without giving up trending-window wins. Adds ~30 lines to strategy + a `--vol-filter-min` param + tests. Small PR.
+
+**Backlog of future strategy work (not started):**
+
+- **Wilder venues for FundingReversion** — dYdX v4 funding regularly hits 50+ bp per 8h. Nautilus rc5 ships a dYdX adapter (`DydxDataClientFactory`, `DydxExecutionClientFactory`, `DydxNetwork` with mainnet+testnet); would need a matching indexer-API data fetcher. Deferred until FundingReversion (or a carry variant) shows promise anywhere.
+- **Multi-symbol** (ETHUSDT, SOLUSDT). Trend more strongly than BTC on 4h; alt funding regimes are wilder. Requires generic `build_perp(exchange, symbol, ...)` factory + a per-symbol/exchange precision-and-fee registry + dropping the `BTCUSDT`-only guards in the 3 backtest CLIs. Estimated 1 medium PR.
+- **Sibling funding carry strategy** — hold through many hourly Hyperliquid funding events as carry income (opposite design to FundingReversion's per-event mean-reversion). Would ship as new strategy alongside `funding_reversion` with shared funding_loader.
+- **Ensemble** — once 2+ strategies each pass individually, weighted portfolio. Session 5+ concern.
+
+### Session 4: Paper-forward validation (BLOCKED until a strategy meets promotion criteria)
+
+- No strategy currently qualifies. Sharpe > 1 gate is the tight constraint (Momentum4h's 0.10 is the current best).
+- Once qualified, deploy winner to testnet via existing decipher-trader stack. Wait 14 days (G7 gate). Monitor Telegram alerts, check drawdown. Only if paper Sharpe holds → promote to live mode with small `max_notional=100 USDC`.
+
+### Deferred technical debt (own PRs, not session-blocking)
+
+Reviewer-flagged items across PRs, deferred per reviewer's own guidance:
+
+- **Wall-clock `datetime.now(...).date()` daily-loss reset in `on_bar`** — affects both `ToyMomentum` (strategy.py:197) AND `FundingReversion` (strategy.py:~110). Fixes deterministic daily-loss behavior across UTC midnight in backtest. Migrate both to `self.clock.utc_now()`. Small PR; 2 files + 2 tests.
+- **CLI factory consolidation** — 3 CLIs × 3 strategies = 9 copy-pasted strategy dispatchers. Pull into `strategies.<name>.build_from_args(args, bar_type)` helpers so the CLIs are ~30 lines each and drift-guard tests aren't needed. Small-medium PR.
+- **Multi-symbol support** — see Session 3 backlog above.
+- **Multi-exchange abstraction** (`nautilus_runner.exchanges.<name>`) — Nautilus adapters (`HyperliquidDataClientFactory`, `DydxDataClientFactory`) are already the plugin surface; wrap in a runner-side registry so `main.py` picks based on `RunnerSettings.exchange`. Prerequisite for actually running any strategy on dYdX live.
+- **Live-mode paper revalidation of the `self.strategy_id` fix (PR #16)** — reasonable operator confidence check; pre-PR-B `self.id` was likely broken silently in live too. Register `toy-momentum-1`, restart runner, tail logs for the 5-min reconciler heartbeat (already partially done in a prior session).
+- **Nautilus 2.0 stable migration** (from the older list — still valid):
+  - Delete manual `sharpe_from_pnls` / `max_drawdown_from_pnls` — swap for `nautilus_trader.analysis.SharpeRatio.calculate_from_realized_pnls()`.
+  - Restore live trade-event persistence — wire `StreamingConfig` on `LiveNodeBuilder`; drop the PR #17 tombstone + regression fence.
+  - Verify `AccountId(str)` vs `AccountId.from_str(str)` behavior on 2.0.
+  - Re-visit R1 (`LiveRiskEngineConfig(bypass=True)`) — 2.0 may finally expose per-strategy risk caps.
+
+### What is emphatically NOT built yet (spec item, deferred)
+
+The `agent-service` (Python + Anthropic Claude SDK) defined in `docs/superpowers/specs/2026-09-18-decipher-trader-design.md` (§4.3, tagged Phase 2+) is **not implemented**. No `agent-service/` directory, no Anthropic SDK dep, no LLM inference in the trading loop. All strategies today are hand-written Python; the harness we've built is the substrate that Phase-2 agent-service will eventually plug into to auto-propose strategies for human review.
+
+### Session 5+: Iterate
+
+- Scale up `max_notional` gradually if live metrics match paper.
+- Add second strategy (test multi-strategy runner scaffolding).
+- Trigger the deferred items above.
 
 ### Session 4: Paper-forward validation
 - Deploy winner to testnet via existing decipher-trader stack.
@@ -175,7 +232,7 @@ That prompt gets the new session grounded, verified, and ready to work in one tu
 
 ### If something in PROGRESS.md is out of date
 
-Trust `git log` over the ledger. If HEAD > `22eaa2d`, run `git log --oneline 22eaa2d..HEAD` to see the diff and update PROGRESS.md as one of the session's first tasks.
+Trust `git log` over the ledger. If HEAD > `69da5b6`, run `git log --oneline 69da5b6..HEAD` to see the diff and update PROGRESS.md as one of the session's first tasks.
 
 ### If the new session's tests don't match the baseline
 
