@@ -103,14 +103,7 @@ the harness they will run in.
   trading and logs a warning. Params: `--entry-threshold` (|rate| that
   triggers entry), `--exit-threshold` (|rate| that triggers exit).
   Grid-search flags: `--entry-threshold-grid`, `--exit-threshold-grid`.
-
-  **Empirical note (2025 H1 6-month window):** funding on BTCUSDT was
-  unusually quiet (`|rate|` stayed under 0.000122 for the whole window,
-  vs. 0.001+ typical during 2021 bull / 2022 crash regimes). A tuned
-  6-combo grid × 3 walk-forward windows produced ~20-25 OOS trades per
-  window and net PnL of **−0.90 USDT** — the hypothesis was falsified for
-  this specific quiet regime. Retest on a longer catalog spanning 2021-2024
-  before writing off the edge class.
+  Per-catalog empirical results: [`docs/strategy_notes/funding_reversion.md`](strategy_notes/funding_reversion.md).
 
 ## Baseline metrics (targets for Session 3)
 

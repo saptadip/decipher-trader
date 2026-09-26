@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Iterator
 from decimal import Decimal
 from typing import Any
@@ -62,15 +63,30 @@ def parse_kline_rows(
         yield parse_kline_row(row, bar_type, price_precision, size_precision)
 
 
+def _parse_optional_float(value: Any) -> float:
+    """Parse a Binance-JSON numeric string, tolerating missing or empty values.
+
+    Binance's historical funding-rate endpoint occasionally returns entries
+    with an empty ``markPrice`` (early-history rows where the field wasn't
+    populated). ``float("")`` raises; return ``NaN`` so the row survives
+    downstream Parquet writes and consumers can decide how to handle missing
+    values.
+    """
+    if value is None or value == "":
+        return math.nan
+    return float(value)
+
+
 def parse_funding_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Convert a Binance funding-rate REST entry to the local Parquet schema.
 
     Input keys (per Binance docs): ``symbol``, ``fundingTime`` (ms), ``fundingRate``
-    (string decimal), ``markPrice`` (string decimal).
+    (string decimal), ``markPrice`` (string decimal — may be empty on early
+    historical rows, in which case ``mark_price`` becomes ``NaN``).
     """
     return {
         "ts_ns": int(entry["fundingTime"]) * MS_TO_NS,
-        "funding_rate": float(entry["fundingRate"]),
-        "mark_price": float(entry["markPrice"]),
+        "funding_rate": _parse_optional_float(entry.get("fundingRate")),
+        "mark_price": _parse_optional_float(entry.get("markPrice")),
         "symbol": str(entry["symbol"]),
     }

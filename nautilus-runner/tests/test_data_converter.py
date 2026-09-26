@@ -94,6 +94,35 @@ def test_parse_kline_rows_streams_bars_in_order():
     assert str(bars[1].close) == "50001.00"
 
 
+def test_parse_funding_entry_tolerates_empty_mark_price():
+    """Binance history occasionally returns an empty ``markPrice`` string."""
+    import math
+
+    entry = {
+        "symbol": "BTCUSDT",
+        "fundingTime": 1_700_000_000_000,
+        "fundingRate": "0.00012345",
+        "markPrice": "",  # empty on some early history rows
+    }
+    out = parse_funding_entry(entry)
+    assert out["funding_rate"] == 0.00012345
+    assert math.isnan(out["mark_price"])
+    assert out["symbol"] == "BTCUSDT"
+
+
+def test_parse_funding_entry_tolerates_missing_mark_price_key():
+    import math
+
+    entry = {
+        "symbol": "BTCUSDT",
+        "fundingTime": 1_700_000_000_000,
+        "fundingRate": "0.0001",
+        # markPrice deliberately omitted
+    }
+    out = parse_funding_entry(entry)
+    assert math.isnan(out["mark_price"])
+
+
 def test_parse_funding_entry_maps_fields():
     entry = {
         "symbol": "BTCUSDT",
