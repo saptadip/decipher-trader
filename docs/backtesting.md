@@ -94,8 +94,10 @@ the harness they will run in.
 - **`buy_and_hold`** — buys one position on the first bar, closes on stop.
   Minimum viable strategy for plumbing verification. Not for edge hunting.
 - **`toy_momentum`** — fast/slow SMA crossover (defaults 5 / 20). Live-mode
-  ready. Long-established demo; typically loses to taker fees over long
-  windows on crypto majors.
+  ready. Bar-interval agnostic — same class handles 1-minute (loses to
+  fees) or 4-hour (weakly positive, fee-tolerant, still below promotion
+  criteria) via config. Per-catalog empirical results:
+  [`docs/strategy_notes/toy_momentum.md`](strategy_notes/toy_momentum.md).
 - **`funding_reversion`** — takes the opposite side of the crowded flow at
   extreme perpetual funding, exits on mean-reversion toward zero. Funding
   data is loaded from `<catalog>/funding_{SYMBOL}.parquet` (produced by
