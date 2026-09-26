@@ -135,6 +135,67 @@ def test_run_backtest_records_at_least_one_trade(tmp_path: Path):
     assert abs(delta - summary.realized_pnl_total) < Decimal("0.01")
 
 
+def test_run_backtest_derives_venue_from_instrument(tmp_path: Path):
+    """Non-Binance instruments must not crash with 'add venue before instrument'.
+
+    Previously the runner hardcoded ``add_venue(BINANCE, ...)``, so any
+    instrument on a different venue (Hyperliquid, dYdX, etc.) failed with
+    ``RuntimeError: Cannot add an Instrument object without first adding
+    its associated venue``. The runner now reads the venue off the
+    instrument itself.
+    """
+    from nautilus_trader.model import (
+        CryptoPerpetual, Currency, InstrumentId, Money, Price, Quantity, Symbol, Venue,
+    )
+
+    HL = Venue("HYPERLIQUID")
+    usdt = Currency.from_str("USDT")
+    btc = Currency.from_str("BTC")
+    hl_instrument = CryptoPerpetual(
+        instrument_id=InstrumentId(Symbol("BTC-USD-PERP"), HL),
+        raw_symbol=Symbol("BTC"),
+        base_currency=btc, quote_currency=usdt, settlement_currency=usdt,
+        is_inverse=False, price_precision=2, size_precision=3,
+        price_increment=Price(0.01, 2), size_increment=Quantity(0.001, 3),
+        ts_event=0, ts_init=0,
+        max_quantity=Quantity(1000.0, 3), min_quantity=Quantity(0.001, 3),
+        min_notional=Money(10.0, usdt),
+        margin_init=Decimal("0.05"), margin_maint=Decimal("0.025"),
+        maker_fee=Decimal("0.00015"), taker_fee=Decimal("0.00035"),
+    )
+    # Catalog + bar_type must match the Hyperliquid instrument's venue.
+    hl_bar_type = "BTC-USD-PERP.HYPERLIQUID-1-HOUR-LAST-EXTERNAL"
+    bt = BarType.from_str(hl_bar_type)
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    start_ns = int(start.timestamp() * 1_000_000_000)
+    bars = []
+    for i in range(24):
+        p = Price(50000.0 + i, 2)
+        ts_open = start_ns + i * HOUR_NS
+        bars.append(Bar(bt, p, p, p, p, Quantity(1.0, 3), ts_open, ts_open + HOUR_NS - 1))
+    write_bars_to_catalog(tmp_path, bars)
+
+    class _HLNoop(Strategy):
+        def __init__(self) -> None:
+            super().__init__(StrategyConfig())
+
+        def on_start(self) -> None:
+            self.subscribe_bars(bt)
+
+        def on_bar(self, _bar: Bar) -> None:
+            pass
+
+    summary = run_backtest(
+        catalog_path=tmp_path,
+        bar_type=hl_bar_type,
+        strategy=_HLNoop(),
+        start=start,
+        end=start.replace(day=2),
+        instrument=hl_instrument,
+    )
+    assert summary.n_bars == 24  # engine accepted a Hyperliquid instrument
+
+
 def test_realized_pnls_from_report_parses_money_strings(caplog):
     """Nautilus formats realized_pnl as ``"<amount> <CURRENCY>"``. Verify parse + WARN."""
     import logging

@@ -7,6 +7,90 @@ strategy itself has not changed between entries unless noted.
 
 ---
 
+## 2026-09-26 — Hyperliquid BTC-USD-PERP hourly, 2026-03-01 → 2026-09-01 (6 months)
+
+**Verdict: hypothesis rejected on this venue too, but for a different reason.**
+
+Session-3 diagnostic — retest on venue-native data after the 3-year Binance
+result. Different reason for the rejection: on Binance fees eat 100%+ of
+the signal; on Hyperliquid the signal itself is trivial.
+
+### Catalog
+
+- 4,380 hourly candles (99.2% of 4,416 expected — Hyperliquid returns
+  zero-fill at pagination edges).
+- 4,416 funding events (Hyperliquid fires funding every hour, not every 8h).
+- Data horizon: Hyperliquid ``candleSnapshot`` returns at most 5000 candles
+  from now (~208 days at 1h), so this retest is anchored to today's window.
+
+### Funding distribution (Hyperliquid, per hour)
+
+| quantile of `|rate|` | value |
+|---|---|
+| 50th | 0.000011 (1.1 bp / hr)                   |
+| 90th | 0.000013                                  |
+| 95th | 0.000014                                  |
+| 99th | 0.000024                                  |
+| 99.9th | 0.000036                                |
+| max | 0.000044                                   |
+
+Cadence-adjusted, Hyperliquid pays much more funding per unit time than
+Binance (26 bp/day vs Binance's 3 bp/day), but each individual event is
+smaller — so a per-event mean-reversion strategy sees less absolute PnL per
+trigger.
+
+### Single-window threshold sweep (6 months)
+
+Instrument built inline with Hyperliquid taker=3.5 bp / maker=1.5 bp.
+
+| `entry_threshold` | `exit_threshold` | trades | PnL (USDT) | Sharpe |
+|---|---|---|---|---|
+| 1 bp/hr  | 0.3 bp/hr | 206 | **+11.41** | +0.045 |
+| 2 bp/hr  | 0.5 bp/hr | 20  | −0.54      | −0.036 |
+| 3 bp/hr  | 1 bp/hr   | 3   | −3.06      | −1.552 |
+
+Lowest threshold fires often enough to be statistically visible; higher
+thresholds are event-starved (fewer than 5 triggers).
+
+### Fee sensitivity (entry=1 bp/hr, exit=0.3 bp/hr)
+
+| taker fee | PnL (USDT) | Sharpe |
+|---|---|---|
+| 3.5 bp (Hyperliquid default) | +11.41 | +0.045 |
+| 2 bp                         | +15.78 | +0.062 |
+| 1 bp                         | +18.69 | +0.073 |
+| 0 (theoretical ceiling)      | +21.60 | +0.085 |
+
+**Even at zero fees the strategy only clears $21.60 on $10k over 6 months
+— ~0.4% APR.** Fees eat about 50% of the raw signal, but the raw signal
+itself is trivially small.
+
+### Root cause
+
+Hyperliquid clamps its funding formula tighter than expected: 99.9th
+percentile is 3.6 bp/hr, max 4.4 bp/hr — no events exceed 10 bp/hr in the
+6-month window. Individual mean-reversion arb trades therefore net cents
+each even before fees. The strategy design (enter-on-extreme,
+exit-on-reversion, single-event holding) is not the right shape to capture
+Hyperliquid's persistent-but-tiny funding regime; a strategy that HOLDS
+through many funding events (accumulating funding as carry income) might
+work, but that is a different edge class than mean-reversion.
+
+### Follow-up options
+
+- Move to a different edge class on the harness (Momentum4h,
+  VolatilityBreakout). Same catalog, different strategy body.
+- Try a **carry** strategy (hold through extreme funding for many hours to
+  accumulate funding, not exit on first reversion) — different design
+  than mean-reversion, would ship as a sibling strategy alongside
+  `FundingReversion`.
+- Test on wilder venues (dYdX regularly hits 50+ bp per 8h during regime
+  shifts). Nautilus rc5 ships a dYdX adapter; we'd need to build the same
+  data fetcher for their indexer API. Multi-exchange refactor deferred to
+  its own PR arc.
+
+---
+
 ## 2026-09-26 — BTCUSDT hourly, 2022-01-01 → 2025-01-01 (3 years)
 
 **Verdict: hypothesis rejected on this venue.**

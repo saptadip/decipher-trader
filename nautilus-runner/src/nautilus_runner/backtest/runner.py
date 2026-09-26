@@ -55,10 +55,15 @@ def run_backtest(
         )
 
     inst = instrument or build_btcusdt_perp()
+    # Derive the venue from the instrument so a Hyperliquid / dYdX / any-other
+    # exchange instrument works without the caller re-specifying it. Previously
+    # this was hardcoded to BINANCE, which rejected any non-Binance instrument
+    # with "Cannot add an Instrument object without first adding its associated venue".
+    venue = inst.id.venue
     engine = BacktestEngine(BacktestEngineConfig(logging=LoggerConfig(bypass_logging=True)))
     try:
         engine.add_venue(
-            venue=BINANCE,
+            venue=venue,
             oms_type=OmsType.NETTING,
             account_type=AccountType.MARGIN,
             starting_balances=[Money.from_decimal(starting_usdt, usdt)],
@@ -74,12 +79,15 @@ def run_backtest(
         realized = engine.portfolio.realized_pnl(inst.id, target_currency=usdt)
         realized_total = realized.as_decimal() if realized is not None else Decimal("0")
 
-        equity_map = engine.portfolio.equity(venue=BINANCE) or {}
+        equity_map = engine.portfolio.equity(venue=venue) or {}
         equity_money = equity_map.get(usdt)
         if equity_money is not None:
             final_balance = equity_money.as_decimal()
         else:
-            logger.warning("engine.portfolio.equity(BINANCE) missing USDT entry; reporting starting balance")
+            logger.warning(
+                "engine.portfolio.equity(%s) missing USDT entry; reporting starting balance",
+                venue,
+            )
             final_balance = starting_usdt
 
         pnl_series = _extract_realized_pnl_series(engine)
