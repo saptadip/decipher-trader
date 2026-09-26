@@ -154,6 +154,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name} must be >= 1; got {value}", file=sys.stderr)
             return 2
 
+    # Silently-ignoring a grid flag that belongs to a different strategy
+    # burns operator time on a long sweep. Detect a non-default value on the
+    # wrong strategy and refuse before any engine spin.
+    #
+    # Defaults are the single-element sentinels declared in argparse:
+    # --fast-grid=[5], --slow-grid=[20], --trade-size-grid=[Decimal("0.001")].
+    _TOY_ONLY = {"--fast-grid": (args.fast_grid, [5]), "--slow-grid": (args.slow_grid, [20])}
+    _BAH_ONLY = {"--trade-size-grid": (args.trade_size_grid, [Decimal("0.001")])}
+    if args.strategy == "buy_and_hold":
+        wrong = [name for name, (got, default) in _TOY_ONLY.items() if got != default]
+        if wrong:
+            print(
+                f"grid flag(s) {wrong} apply only to --strategy toy_momentum and would "
+                f"be ignored under --strategy buy_and_hold",
+                file=sys.stderr,
+            )
+            return 2
+    if args.strategy == "toy_momentum":
+        wrong = [name for name, (got, default) in _BAH_ONLY.items() if got != default]
+        if wrong:
+            print(
+                f"grid flag(s) {wrong} apply only to --strategy buy_and_hold and would "
+                f"be ignored under --strategy toy_momentum",
+                file=sys.stderr,
+            )
+            return 2
+
     # For toy_momentum: reject any grid where slow <= fast so we fail fast
     # (ToyMomentumConfig itself asserts on construction; catching earlier gives
     # a friendlier CLI error than a stack trace on the first combo).

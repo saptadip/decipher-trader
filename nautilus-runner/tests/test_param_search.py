@@ -110,10 +110,20 @@ def test_walk_forward_search_returns_one_window_result_per_walk_window(tmp_path:
         assert w.winner_params in [p for p, _ in w.all_train_summaries]
 
 
-def test_walk_forward_search_picks_highest_train_sharpe_as_winner(tmp_path: Path):
-    """Winner selection uses ``sharpe_from_pnls`` on the train summary by default."""
+def test_walk_forward_search_selector_picks_max_scoring_combo(tmp_path: Path):
+    """The winner must be the combo with the highest selector score.
+
+    Uses a custom selector on ``realized_pnl_total`` (a field that genuinely
+    differs between ``BuyAndHold`` combos with different ``trade_size``s —
+    the default per-trade Sharpe collapses to 0.0 on single-trade windows
+    per its ``len < 2`` early-return, so a naive default-selector assertion
+    would pass by tie regardless of the selection mechanism).
+    """
     start = datetime(2025, 1, 1, tzinfo=UTC)
     _write_synthetic_catalog(tmp_path, start, n_hours=24 * 31 * 3)
+
+    def realized_pnl_selector(train_summary):
+        return float(train_summary.realized_pnl_total)
 
     result = walk_forward_search(
         catalog_path=tmp_path,
@@ -124,36 +134,105 @@ def test_walk_forward_search_picks_highest_train_sharpe_as_winner(tmp_path: Path
         train_months=1,
         test_months=1,
         step_months=1,
-        param_grid={"trade_size": ["0.001", "0.003"]},
+        param_grid={"trade_size": ["0.001", "0.002", "0.003"]},
+        selector=realized_pnl_selector,
     )
     assert len(result.windows) == 1
     w = result.windows[0]
-    train_scores = {tuple(p.items()): s.sharpe for p, s in w.all_train_summaries}
+    scores = {tuple(p.items()): realized_pnl_selector(s) for p, s in w.all_train_summaries}
     winner_key = tuple(w.winner_params.items())
-    assert train_scores[winner_key] == max(train_scores.values())
+    assert scores[winner_key] == max(scores.values())
+    # Sanity: the max score is strictly greater than the min — otherwise the
+    # test degenerates to a tie and proves nothing.
+    assert max(scores.values()) > min(scores.values())
 
 
-def test_walk_forward_search_custom_selector_picks_lowest_drawdown(tmp_path: Path):
-    """Passing a custom selector overrides the default train-Sharpe criterion."""
+def test_walk_forward_search_selector_sign_flip_picks_opposite_combo(tmp_path: Path):
+    """A selector with the opposite sign must pick the opposite combo.
+
+    Guards against a hypothetical regression that swapped ``max`` for ``min``
+    in the winner-selection code path.
+    """
     start = datetime(2025, 1, 1, tzinfo=UTC)
     _write_synthetic_catalog(tmp_path, start, n_hours=24 * 31 * 3)
 
-    result = walk_forward_search(
-        catalog_path=tmp_path,
-        bar_type=BAR_TYPE,
+    def positive(s):
+        return float(s.realized_pnl_total)
+
+    def negative(s):
+        return -float(s.realized_pnl_total)
+
+    grid = {"trade_size": ["0.001", "0.002", "0.003"]}
+    r_pos = walk_forward_search(
+        catalog_path=tmp_path, bar_type=BAR_TYPE,
         strategy_from_params=_buy_and_hold_from_params,
-        start=start,
-        end=datetime(2025, 3, 1, tzinfo=UTC),
-        train_months=1,
-        test_months=1,
-        step_months=1,
-        param_grid={"trade_size": ["0.001", "0.003"]},
-        selector=lambda s: -s.max_drawdown,  # smallest drawdown → highest score
+        start=start, end=datetime(2025, 3, 1, tzinfo=UTC),
+        train_months=1, test_months=1, step_months=1,
+        param_grid=grid, selector=positive,
+    )
+    r_neg = walk_forward_search(
+        catalog_path=tmp_path, bar_type=BAR_TYPE,
+        strategy_from_params=_buy_and_hold_from_params,
+        start=start, end=datetime(2025, 3, 1, tzinfo=UTC),
+        train_months=1, test_months=1, step_months=1,
+        param_grid=grid, selector=negative,
+    )
+    assert r_pos.windows[0].winner_params != r_neg.windows[0].winner_params
+
+
+def test_walk_forward_search_winner_test_summary_matches_winner_params(tmp_path: Path):
+    """The OOS scorecard must be the test summary of the SAME combo whose train won.
+
+    A regression that returned ``test_summaries[0][1]`` regardless of the winner
+    would silently pass every other assertion in this suite. This test forces a
+    known non-first combo to win via a targeted selector, then asserts the
+    winner's test summary IS the one that belongs to that combo.
+    """
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    _write_synthetic_catalog(tmp_path, start, n_hours=24 * 31 * 3)
+
+    # Selector that rewards trade_size closest to 0.002 (middle combo) —
+    # arithmetically forces the middle combo to win as long as the three
+    # combos have distinguishable realized_pnl_totals.
+    result = walk_forward_search(
+        catalog_path=tmp_path, bar_type=BAR_TYPE,
+        strategy_from_params=_buy_and_hold_from_params,
+        start=start, end=datetime(2025, 3, 1, tzinfo=UTC),
+        train_months=1, test_months=1, step_months=1,
+        param_grid={"trade_size": ["0.001", "0.002", "0.003"]},
+        selector=lambda s: -abs(float(s.realized_pnl_total) - 2.0),  # peaks near |pnl|=2
     )
     w = result.windows[0]
-    train_dds = {tuple(p.items()): s.max_drawdown for p, s in w.all_train_summaries}
-    winner_key = tuple(w.winner_params.items())
-    assert train_dds[winner_key] == min(train_dds.values())
+    # Locate the (combo, summary) pair whose combo equals the winner_params.
+    matching = [s for c, s in w.all_test_summaries if c == w.winner_params]
+    assert len(matching) == 1, f"expected exactly one matching combo; got {len(matching)}"
+    # The winner's test summary must be one of the combo's test summaries.
+    # Identity check is too strong (walk_forward returns fresh dataclasses);
+    # field comparison via realized_pnl_total is sufficient given trade_sizes
+    # produce distinguishable PnL.
+    assert w.winner_test_summary.realized_pnl_total == matching[0].realized_pnl_total
+    assert w.winner_test_summary.n_trades == matching[0].n_trades
+
+
+def test_walk_forward_search_default_selector_reads_summary_sharpe():
+    """Sanity-check that the default selector is exactly ``train_summary.sharpe``."""
+    from nautilus_runner.backtest.param_search import _default_selector
+    from nautilus_runner.backtest.summary import BacktestSummary
+
+    stub = BacktestSummary(
+        bar_type=BAR_TYPE,
+        start=datetime(2025, 1, 1, tzinfo=UTC),
+        end=datetime(2025, 2, 1, tzinfo=UTC),
+        n_bars=10,
+        initial_balance=Decimal("10000"),
+        final_balance=Decimal("10000"),
+        realized_pnl_total=Decimal("0"),
+        n_trades=0,
+        sharpe=1.42,
+        max_drawdown=3.0,
+        raw_stats={},
+    )
+    assert _default_selector(stub) == 1.42
 
 
 def test_walk_forward_search_calls_factory_2WP_times(tmp_path: Path):

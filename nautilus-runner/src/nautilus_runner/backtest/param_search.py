@@ -26,7 +26,7 @@ during exploration.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from itertools import product
@@ -35,7 +35,6 @@ from typing import Any
 
 from nautilus_runner.backtest.summary import BacktestSummary
 from nautilus_runner.backtest.walk_forward import walk_forward
-from nautilus_runner.metrics import sharpe_from_pnls  # re-exported for tests
 
 
 ParamCombo = dict[str, Any]
@@ -114,6 +113,18 @@ def _default_selector(train_summary: BacktestSummary) -> float:
     per-trade Sharpe is comparable across different trade counts, which
     the annualized version is not when trade counts differ dramatically
     between windows.
+
+    Caveats:
+
+    - Selector return values must be finite. ``NaN`` / ``inf`` produce
+      undefined winner selection because Python's ``max`` with those values
+      is implementation-defined.
+    - Per-trade Sharpe returns ``0.0`` for combos with fewer than two trades
+      or with all-identical PnL (``stdev == 0.0``). On low-turnover
+      strategies this collapses many combos into a tie at ``0.0`` and
+      ``max()`` picks the first by insertion order. Override via the
+      ``selector`` kwarg for exploration — e.g.
+      ``lambda s: s.realized_pnl_total`` or ``lambda s: -s.max_drawdown``.
     """
     return train_summary.sharpe
 
@@ -171,12 +182,13 @@ def walk_forward_search(
     n_windows = len(per_combo_results[0][1].windows)
     # Every combo must produce the same window count — walk_forward is
     # deterministic in its window iteration and does not depend on strategy
-    # behaviour, so this is a strong invariant. Assert to surface any future
-    # divergence loudly.
+    # behaviour, so this is a strong invariant. Raise (not ``assert``) so
+    # ``python -O`` cannot silently strip the check.
     for combo, wf in per_combo_results:
-        assert len(wf.windows) == n_windows, (
-            f"combo {combo!r} produced {len(wf.windows)} windows; expected {n_windows}"
-        )
+        if len(wf.windows) != n_windows:
+            raise RuntimeError(
+                f"combo {combo!r} produced {len(wf.windows)} windows; expected {n_windows}"
+            )
 
     result = ParamSearchResult()
     for i in range(n_windows):

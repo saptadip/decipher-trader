@@ -19,17 +19,73 @@ def _load_cli_module():
     return module
 
 
-def test_interval_bar_spec_matches_run_backtest_cli():
-    rb_spec = importlib.util.spec_from_file_location(
-        "_rb_cli", REPO / "scripts" / "run_backtest.py",
-    )
-    assert rb_spec is not None and rb_spec.loader is not None
-    rb = importlib.util.module_from_spec(rb_spec)
-    rb_spec.loader.exec_module(rb)
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
+
+def test_interval_bar_spec_matches_run_backtest_cli():
+    rb = _load_module("_rb_cli", REPO / "scripts" / "run_backtest.py")
     ps = _load_cli_module()
     assert ps.INTERVAL_TO_BAR_SPEC == rb.INTERVAL_TO_BAR_SPEC
     assert ps.STRATEGY_CHOICES == rb.STRATEGY_CHOICES
+
+
+def test_shared_flag_defaults_agree_across_all_three_clis():
+    """All three CLIs must ship identical defaults for shared flags.
+
+    Silent drift (e.g. --maker-fee default changing in only one CLI) would
+    produce different results for the "same" invocation. The Session-2-PR-C
+    review deferred a shared cli_common module with "revisit if a third CLI
+    arrives" — this is the parity fence in lieu of that consolidation.
+    """
+    rb = _load_module("_rb_cli", REPO / "scripts" / "run_backtest.py")
+    wf = _load_module("_wf_cli", REPO / "scripts" / "walk_forward.py")
+    ps = _load_cli_module()
+
+    def defaults(mod, argv):
+        # Parse a minimal successful arg set and read Namespace defaults.
+        return vars(mod._parse_args(argv))
+
+    base = [
+        "--catalog", "/tmp/x",
+        "--symbol", "BTCUSDT",
+        "--interval", "1h",
+        "--start", "2025-01-01",
+        "--end", "2025-07-01",
+    ]
+    rb_d = defaults(rb, base)
+    wf_d = defaults(wf, base)
+    ps_d = defaults(ps, base)
+
+    for flag in (
+        "starting_usdt",
+        "taker_fee",
+        "maker_fee",
+        "price_precision",
+        "size_precision",
+    ):
+        assert rb_d[flag] == wf_d[flag] == ps_d[flag], (
+            f"{flag} default drifts: run_backtest={rb_d[flag]!r} "
+            f"walk_forward={wf_d[flag]!r} param_search={ps_d[flag]!r}"
+        )
+
+    # Scalar ToyMomentum flags are in run_backtest + walk_forward + param_search,
+    # but param_search uses -grid variants for fast/slow, so compare only what
+    # is truly shared as scalars.
+    for flag in ("max_position", "max_notional", "max_daily_loss"):
+        assert rb_d[flag] == wf_d[flag] == ps_d[flag], (
+            f"{flag} default drifts: run_backtest={rb_d[flag]!r} "
+            f"walk_forward={wf_d[flag]!r} param_search={ps_d[flag]!r}"
+        )
+
+    for flag in ("train_months", "test_months", "step_months"):
+        assert wf_d[flag] == ps_d[flag], (
+            f"{flag} default drifts: walk_forward={wf_d[flag]!r} param_search={ps_d[flag]!r}"
+        )
 
 
 def test_every_interval_produces_a_valid_bar_type():
@@ -78,6 +134,40 @@ def test_cli_rejects_zero_month_args(tmp_path, capsys):
     )
     assert rc == 2
     assert "--train-months must be >= 1" in capsys.readouterr().err
+
+
+def test_cli_rejects_toy_momentum_grid_flag_under_buy_and_hold(tmp_path, capsys):
+    """--fast-grid / --slow-grid on buy_and_hold would silently no-op; refuse."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "buy_and_hold",
+            "--fast-grid", "3,5,10",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--fast-grid" in err and "toy_momentum" in err
+
+
+def test_cli_rejects_buy_and_hold_grid_flag_under_toy_momentum(tmp_path, capsys):
+    """--trade-size-grid on toy_momentum would silently no-op; refuse."""
+    mod = _load_cli_module()
+    rc = mod.main(
+        [
+            "--catalog", str(tmp_path),
+            "--symbol", "BTCUSDT", "--interval", "1h",
+            "--start", "2025-01-01", "--end", "2025-07-01",
+            "--strategy", "toy_momentum",
+            "--trade-size-grid", "0.001,0.002",
+        ],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--trade-size-grid" in err and "buy_and_hold" in err
 
 
 def test_cli_rejects_toy_momentum_slow_le_fast(tmp_path, capsys):
