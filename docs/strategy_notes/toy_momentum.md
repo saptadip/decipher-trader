@@ -12,6 +12,62 @@ class invoked with different config values — no separate strategy files.
 
 ---
 
+## 2026-09-26 — Binance BTCUSDT 4-hour, 2022-01-01 → 2025-01-01 (grid sensitivity)
+
+**Verdict: parameter search cannot rescue this edge. Signal caps at ~$50-55 OOS
+regardless of grid density.**
+
+Follow-up to the first 4h entry below. Tested two additional grid shapes to
+answer "does a wider or denser grid raise Sharpe?" — no.
+
+### Grid comparison
+
+Same catalog, same walk-forward schedule (train=6m / test=3m / step=3m,
+10 windows). Only the grid changes:
+
+| grid label | fast × slow | combos | net OOS PnL | trades | avg Sharpe | pos windows | max DD |
+|---|---|---|---|---|---|---|---|
+| **baseline** (below) | 3,6,12 × 24,48,96                    | 9  | **+\$54.43** | 163 | **+0.065** | 7/10 | ~4-5 |
+| wider       | 6,12,24,48 × 48,96,144,192 (drops slow≤fast) | 15 | +\$15.44     | 62  | −0.110     | 4/10 | 14.79 |
+| dense       | 6,9,12,18 × 24,36,48,72                       | 16 | +\$50.10     | 214 | +0.013     | 7/10 | 14.54 |
+
+- **Wider grid hurt.** Longer slow periods (144, 192, 288) filter too much
+  signal — many windows fire only 1-5 trades and the selection process picks
+  overfit-to-train combos that lose OOS.
+- **Denser grid tied on PnL, lost on Sharpe.** More trades, more chop losses,
+  more drawdown; the added grid resolution didn't find a better sweet spot
+  than the baseline `fast=12, slow=24`.
+- **`fast=12, slow=24` remains the modal winner** — wins 4 of 10 windows on
+  the dense grid; wins 5 of 10 on baseline; pairs with the biggest OOS wins
+  (w5 +\$9.58, w6 +\$27.62, w9 +\$16.44 / +\$8.92).
+
+### Max drawdown (across all tested grids)
+
+| grid | max DD across 10 windows | as % of \$10k capital |
+|---|---|---|
+| baseline | 6.12 USDT  | 0.06% |
+| wider    | 14.79 USDT | 0.15% |
+| dense    | 14.54 USDT | 0.15% |
+
+All grids are well under the G7 gate's 20% drawdown ceiling. The
+drawdown-vs-Sharpe axis is not the bottleneck — the raw signal is.
+
+### Interpretation
+
+- Parameter search can only exploit signal that exists. Momentum4h's edge on
+  3-year Binance BTCUSDT is **~\$54 OOS after fees**, no more. Wider or
+  denser grids only reshape the overfitting risk.
+- Next steps have to change the **signal**, not the search:
+  - **Volatility filter** (e.g. Bollinger-band gate, ATR minimum) to skip
+    chop windows where momentum decays. Losses cluster in w0-w4 (choppy
+    2022-2023 windows); if filtered out, avg Sharpe rises.
+  - **Multi-symbol** (ETHUSDT, SOLUSDT trend more strongly than BTC).
+    Requires the deferred multi-symbol refactor.
+  - **Different feature** (e.g. MA slope + volume confirmation, not just
+    crossover) — bigger design change.
+
+---
+
 ## 2026-09-26 — Binance BTCUSDT 4-hour, 2022-01-01 → 2025-01-01 (3 years)
 
 **Verdict: weak positive signal — first non-underwater strategy on the
