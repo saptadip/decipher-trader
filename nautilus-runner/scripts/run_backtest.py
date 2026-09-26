@@ -82,8 +82,6 @@ def _build_buy_and_hold(args: argparse.Namespace, bar_type: BarType) -> object:
 
 
 def _build_funding_reversion(args: argparse.Namespace, bar_type: BarType) -> object:
-    from datetime import date, timezone
-
     from nautilus_runner.data.funding_loader import default_funding_path, load_funding
     from strategies.funding_reversion.strategy import (
         FundingReversion,

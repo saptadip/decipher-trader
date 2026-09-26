@@ -139,8 +139,6 @@ def _make_strategy_from_params(args: argparse.Namespace, bar_type: BarType):
         return _make
 
     if args.strategy == "funding_reversion":
-        from datetime import date, timezone
-
         from nautilus_runner.data.funding_loader import default_funding_path, load_funding
         from strategies.funding_reversion.strategy import (
             FundingReversion,
@@ -159,7 +157,12 @@ def _make_strategy_from_params(args: argparse.Namespace, bar_type: BarType):
                     funding_events=events,
                     entry_threshold=params["entry_threshold"],
                     exit_threshold=params["exit_threshold"],
-                    trade_size=args.trade_size_grid[0],  # fixed for funding_reversion grid
+                    # trade_size fixed: --trade-size-grid is owned by buy_and_hold in
+                    # _GRID_OWNERS, so funding_reversion cannot vary trade_size in a
+                    # grid today. If a future user wants a trade_size axis here, add
+                    # a dedicated --funding-trade-size-grid flag and register it as
+                    # funding_reversion-owned in _GRID_OWNERS.
+                    trade_size=args.trade_size_grid[0],
                     max_notional=args.max_notional,
                     max_daily_loss=args.max_daily_loss,
                     max_position=args.max_position,

@@ -90,6 +90,27 @@ def test_config_rejects_exit_ge_entry():
         )
 
 
+def test_config_accepts_strategy_db_id_and_arbitrary_kwargs():
+    """``**_kwargs`` is the live-mode plumbing hook (mirrors ToyMomentum)."""
+    cfg = FundingReversionConfig(
+        instrument_id=INSTRUMENT, bar_type=BAR_TYPE, funding_events=[],
+        entry_threshold=0.001, exit_threshold=0.0001, trade_size=Decimal("0.001"),
+        max_notional=1000, max_daily_loss=100, max_position=1,
+        strategy_db_id=42,
+        some_future_field="ignored",  # unknown kwargs must not raise
+    )
+    assert cfg.strategy_db_id == 42
+
+
+def test_config_strategy_db_id_defaults_to_none_when_unset():
+    cfg = FundingReversionConfig(
+        instrument_id=INSTRUMENT, bar_type=BAR_TYPE, funding_events=[],
+        entry_threshold=0.001, exit_threshold=0.0001, trade_size=Decimal("0.001"),
+        max_notional=1000, max_daily_loss=100, max_position=1,
+    )
+    assert cfg.strategy_db_id is None
+
+
 # ---------------------------------------------------------------------------
 # Signal — entry
 # ---------------------------------------------------------------------------

@@ -25,9 +25,21 @@ while in position is ignored (no pyramiding).
 Position caps mirror ``ToyMomentum``: ``max_position`` (units) and
 ``max_notional`` (quote) block sizing errors; ``max_daily_loss`` is a soft
 circuit that refuses new entries after the day's realized PnL crosses the
-threshold. Live-only side effects (``state.audit_writer`` / ``state.metrics``)
-are guarded so the strategy runs cleanly under both ``BacktestEngine`` and
-``LiveNode``.
+threshold. Backtest-safe today; live-mode hardening (venue-position seed at
+``on_start``, reconciler timer, ``cancel_all_orders`` at ``on_stop``, audit
+writer + metrics writer wiring, socket-disconnect handling) is deferred —
+see the ToyMomentum live-plumbing walkthrough from Session-2 PR-B for the
+pattern before promoting this strategy to paper mode.
+
+Bar-interval assumption
+-----------------------
+
+Assumes ``bar_interval < funding_interval`` (Binance USDM funding is 8h).
+At 1h / 4h bars, at most one funding event falls inside any bar. At bar
+intervals ``>= 8h``, multiple events can arrive in the same bar and the
+``while`` loop below would enter → exit → re-enter within the bar, paying
+fees for no real exposure. The CLIs currently expose ``1m``/``5m``/``15m``/
+``1h``/``4h`` (all safe) and ``1d`` (unsafe — do not use with this strategy).
 """
 
 from __future__ import annotations
@@ -89,10 +101,13 @@ class FundingReversion(Strategy):
         self._events: deque[dict[str, Any]] = deque(events)
         self._signed_position: float = 0.0
         self._last_close: float = 0.0
-        self._last_bar_ts_ns: int = 0
 
         self._realized_pnl_today: float = 0.0
         self._last_reset_utc_date: date | None = None
+        # NOTE: the daily-loss reset below uses `datetime.now(timezone.utc)` —
+        # wall clock, not the simulated clock. Same pre-existing pattern as
+        # ToyMomentum; a follow-up PR will migrate both to `self.clock.utc_now()`
+        # so backtests are deterministic across UTC-midnight crossings.
 
     def on_start(self) -> None:
         self.subscribe_bars(self._cfg.bar_type)
@@ -101,10 +116,13 @@ class FundingReversion(Strategy):
         self._last_close = float(bar.close)
         ts = int(bar.ts_event)
         # Consume any funding events that fired since the previous bar.
+        # bar.ts_event is the bar-close timestamp under Nautilus's default
+        # (LeftOpen, timestamp_on_close) bar semantics, so a funding event at
+        # exactly the bar's close ns fires on that bar and its resulting market
+        # order fills at the OPEN of the next bar — no look-ahead.
         while self._events and int(self._events[0]["ts_ns"]) <= ts:
             event = self._events.popleft()
             self._on_funding(event, bar)
-        self._last_bar_ts_ns = ts
 
     def _on_funding(self, event: dict[str, Any], bar: Bar) -> None:
         rate = float(event["funding_rate"])
@@ -122,7 +140,7 @@ class FundingReversion(Strategy):
         # In-position: exit on mean-reversion.
         if abs(rate) <= self._cfg.exit_threshold:
             side = OrderSide.SELL if self._signed_position > 0 else OrderSide.BUY
-            self._submit_capped(side, float(self._cfg.trade_size))
+            self._submit_capped(side, self._cfg.trade_size)
 
     def _deep_loss_today(self) -> bool:
         return self._realized_pnl_today <= -self._cfg.max_daily_loss
@@ -133,13 +151,18 @@ class FundingReversion(Strategy):
             self._last_reset_utc_date = today
 
     def _enter(self, side: OrderSide) -> None:
-        delta = float(self._cfg.trade_size) if side is OrderSide.BUY else -float(self._cfg.trade_size)
-        self._submit_capped(side, abs(delta))
+        self._submit_capped(side, self._cfg.trade_size)
 
-    def _submit_capped(self, side: OrderSide, qty: float) -> None:
-        # Position cap
-        delta = qty if side is OrderSide.BUY else -qty
+    def _submit_capped(self, side: OrderSide, qty: Decimal) -> None:
+        """Submit a market order with cap enforcement.
+
+        ``qty`` is a positive ``Decimal`` — the caller passes ``trade_size``
+        directly and this method applies the sign based on ``side``.
+        """
+        qty_float = float(qty)
+        delta = qty_float if side is OrderSide.BUY else -qty_float
         projected = self._signed_position + delta
+        # Position cap
         if abs(projected) > self._cfg.max_position:
             self.log.warning(
                 f"skip {side.name}: projected position {projected} would breach "
@@ -156,10 +179,15 @@ class FundingReversion(Strategy):
                 )
                 return
 
+        # AGENTS.md exact-arithmetic rule: quantity through Decimal, not float.
+        # ``trade_size.as_tuple().exponent`` is negative for sub-integer values
+        # (e.g. ``Decimal("0.001").as_tuple().exponent == -3``); the precision
+        # for ``Quantity.from_decimal_dp`` is the positive form.
+        precision = -self._cfg.trade_size.as_tuple().exponent
         order = self.order_factory.market(
             instrument_id=self._cfg.instrument_id,
             order_side=side,
-            quantity=Quantity(qty, self._cfg.trade_size.as_tuple().exponent * -1),
+            quantity=Quantity.from_decimal_dp(qty, precision),
         )
         self.submit_order(order)
         self._signed_position += delta
