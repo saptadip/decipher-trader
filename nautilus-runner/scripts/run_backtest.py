@@ -39,7 +39,7 @@ INTERVAL_TO_BAR_SPEC = {
     "1d": "1-DAY",
 }
 
-STRATEGY_CHOICES = ("buy_and_hold", "toy_momentum")
+STRATEGY_CHOICES = ("buy_and_hold", "toy_momentum", "funding_reversion")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -55,9 +55,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # ToyMomentum-only hyperparameters (ignored by buy_and_hold).
     p.add_argument("--fast", type=int, default=5, help="ToyMomentum fast MA period")
     p.add_argument("--slow", type=int, default=20, help="ToyMomentum slow MA period")
-    p.add_argument("--max-position", type=float, default=0.01, help="ToyMomentum position cap")
-    p.add_argument("--max-notional", type=float, default=1000.0, help="ToyMomentum notional cap")
-    p.add_argument("--max-daily-loss", type=float, default=100.0, help="ToyMomentum daily-loss circuit")
+    p.add_argument("--max-position", type=float, default=0.01, help="position cap (ToyMomentum / FundingReversion)")
+    p.add_argument("--max-notional", type=float, default=1000.0, help="notional cap (ToyMomentum / FundingReversion)")
+    p.add_argument("--max-daily-loss", type=float, default=100.0, help="daily-loss circuit (ToyMomentum / FundingReversion)")
+    # FundingReversion-only hyperparameters.
+    p.add_argument("--entry-threshold", type=float, default=0.001, help="FundingReversion |rate| entry threshold")
+    p.add_argument("--exit-threshold", type=float, default=0.0001, help="FundingReversion |rate| exit threshold")
     p.add_argument("--taker-fee", type=Decimal, default=Decimal("0.000180"))
     p.add_argument("--maker-fee", type=Decimal, default=Decimal("0.000200"))
     p.add_argument("--price-precision", type=int, default=2)
@@ -76,6 +79,34 @@ def _build_buy_and_hold(args: argparse.Namespace, bar_type: BarType) -> object:
         size_precision=args.size_precision,
     )
     return BuyAndHold(cfg)
+
+
+def _build_funding_reversion(args: argparse.Namespace, bar_type: BarType) -> object:
+    from datetime import date, timezone
+
+    from nautilus_runner.data.funding_loader import default_funding_path, load_funding
+    from strategies.funding_reversion.strategy import (
+        FundingReversion,
+        FundingReversionConfig,
+    )
+
+    start = datetime.combine(date.fromisoformat(args.start), datetime.min.time(), tzinfo=timezone.utc)
+    end = datetime.combine(date.fromisoformat(args.end), datetime.min.time(), tzinfo=timezone.utc)
+    funding_path = default_funding_path(args.catalog, args.symbol)
+    events = load_funding(funding_path, start=start, end=end)
+
+    cfg = FundingReversionConfig(
+        instrument_id=InstrumentId.from_str(f"{args.symbol}-PERP.BINANCE"),
+        bar_type=bar_type,
+        funding_events=events,
+        entry_threshold=args.entry_threshold,
+        exit_threshold=args.exit_threshold,
+        trade_size=args.trade_size,
+        max_notional=args.max_notional,
+        max_daily_loss=args.max_daily_loss,
+        max_position=args.max_position,
+    )
+    return FundingReversion(cfg)
 
 
 def _build_toy_momentum(args: argparse.Namespace, bar_type: BarType) -> object:
@@ -124,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         strategy = _build_buy_and_hold(args, bar_type)
     elif args.strategy == "toy_momentum":
         strategy = _build_toy_momentum(args, bar_type)
+    elif args.strategy == "funding_reversion":
+        strategy = _build_funding_reversion(args, bar_type)
     else:  # pragma: no cover - defended by argparse `choices`
         raise ValueError(f"unknown strategy: {args.strategy}")
 

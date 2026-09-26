@@ -41,11 +41,15 @@ INTERVAL_TO_BAR_SPEC = {
     "1d": "1-DAY",
 }
 
-STRATEGY_CHOICES = ("buy_and_hold", "toy_momentum")
+STRATEGY_CHOICES = ("buy_and_hold", "toy_momentum", "funding_reversion")
 
 
 def _parse_int_grid(value: str) -> list[int]:
     return [int(x.strip()) for x in value.split(",") if x.strip()]
+
+
+def _parse_float_grid(value: str) -> list[float]:
+    return [float(x.strip()) for x in value.split(",") if x.strip()]
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -76,6 +80,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[Decimal("0.001")],
         help="comma-separated trade sizes (only used by buy_and_hold)",
     )
+    # FundingReversion-only grids.
+    p.add_argument("--entry-threshold-grid", type=_parse_float_grid, default=[0.001],
+                   help="comma-separated FundingReversion |rate| entry thresholds")
+    p.add_argument("--exit-threshold-grid", type=_parse_float_grid, default=[0.0001],
+                   help="comma-separated FundingReversion |rate| exit thresholds")
     p.add_argument("--out", help="write JSON result to this path; also always printed to stdout")
     return p.parse_args(argv)
 
@@ -85,6 +94,11 @@ def _build_grid(args: argparse.Namespace) -> dict[str, list]:
         return {"fast": args.fast_grid, "slow": args.slow_grid}
     if args.strategy == "buy_and_hold":
         return {"trade_size": [str(x) for x in args.trade_size_grid]}
+    if args.strategy == "funding_reversion":
+        return {
+            "entry_threshold": args.entry_threshold_grid,
+            "exit_threshold": args.exit_threshold_grid,
+        }
     raise ValueError(f"unknown strategy: {args.strategy}")  # pragma: no cover
 
 
@@ -124,6 +138,36 @@ def _make_strategy_from_params(args: argparse.Namespace, bar_type: BarType):
 
         return _make
 
+    if args.strategy == "funding_reversion":
+        from datetime import date, timezone
+
+        from nautilus_runner.data.funding_loader import default_funding_path, load_funding
+        from strategies.funding_reversion.strategy import (
+            FundingReversion,
+            FundingReversionConfig,
+        )
+
+        start = datetime.combine(date.fromisoformat(args.start), datetime.min.time(), tzinfo=timezone.utc)
+        end = datetime.combine(date.fromisoformat(args.end), datetime.min.time(), tzinfo=timezone.utc)
+        events = load_funding(default_funding_path(args.catalog, args.symbol), start=start, end=end)
+
+        def _make(params: dict):
+            return FundingReversion(
+                FundingReversionConfig(
+                    instrument_id=instrument_id,
+                    bar_type=bar_type,
+                    funding_events=events,
+                    entry_threshold=params["entry_threshold"],
+                    exit_threshold=params["exit_threshold"],
+                    trade_size=args.trade_size_grid[0],  # fixed for funding_reversion grid
+                    max_notional=args.max_notional,
+                    max_daily_loss=args.max_daily_loss,
+                    max_position=args.max_position,
+                )
+            )
+
+        return _make
+
     raise ValueError(f"unknown strategy: {args.strategy}")  # pragma: no cover
 
 
@@ -158,28 +202,28 @@ def main(argv: list[str] | None = None) -> int:
     # burns operator time on a long sweep. Detect a non-default value on the
     # wrong strategy and refuse before any engine spin.
     #
-    # Defaults are the single-element sentinels declared in argparse:
-    # --fast-grid=[5], --slow-grid=[20], --trade-size-grid=[Decimal("0.001")].
-    _TOY_ONLY = {"--fast-grid": (args.fast_grid, [5]), "--slow-grid": (args.slow_grid, [20])}
-    _BAH_ONLY = {"--trade-size-grid": (args.trade_size_grid, [Decimal("0.001")])}
-    if args.strategy == "buy_and_hold":
-        wrong = [name for name, (got, default) in _TOY_ONLY.items() if got != default]
-        if wrong:
-            print(
-                f"grid flag(s) {wrong} apply only to --strategy toy_momentum and would "
-                f"be ignored under --strategy buy_and_hold",
-                file=sys.stderr,
-            )
-            return 2
-    if args.strategy == "toy_momentum":
-        wrong = [name for name, (got, default) in _BAH_ONLY.items() if got != default]
-        if wrong:
-            print(
-                f"grid flag(s) {wrong} apply only to --strategy buy_and_hold and would "
-                f"be ignored under --strategy toy_momentum",
-                file=sys.stderr,
-            )
-            return 2
+    # Each grid flag → the strategy that owns it. Non-owning strategies must
+    # not receive a non-default value.
+    _GRID_OWNERS = {
+        "--fast-grid": ("toy_momentum", args.fast_grid, [5]),
+        "--slow-grid": ("toy_momentum", args.slow_grid, [20]),
+        "--trade-size-grid": ("buy_and_hold", args.trade_size_grid, [Decimal("0.001")]),
+        "--entry-threshold-grid": ("funding_reversion", args.entry_threshold_grid, [0.001]),
+        "--exit-threshold-grid": ("funding_reversion", args.exit_threshold_grid, [0.0001]),
+    }
+    wrong = [
+        (flag, owner)
+        for flag, (owner, got, default) in _GRID_OWNERS.items()
+        if owner != args.strategy and got != default
+    ]
+    if wrong:
+        detail = ", ".join(f"{flag} (owned by --strategy {owner})" for flag, owner in wrong)
+        print(
+            f"grid flag(s) supplied for the wrong strategy — would be silently ignored "
+            f"under --strategy {args.strategy}: {detail}",
+            file=sys.stderr,
+        )
+        return 2
 
     # For toy_momentum: reject any grid where slow <= fast so we fail fast
     # (ToyMomentumConfig itself asserts on construction; catching earlier gives
@@ -189,6 +233,33 @@ def main(argv: list[str] | None = None) -> int:
         if bad:
             print(
                 f"invalid ToyMomentum grid: slow must exceed fast; offending pairs: {bad}",
+                file=sys.stderr,
+            )
+            return 2
+
+    # For funding_reversion: reject non-positive entry, negative exit, and
+    # exit >= entry pairs (FundingReversionConfig itself raises on construction).
+    if args.strategy == "funding_reversion":
+        if any(e <= 0 for e in args.entry_threshold_grid):
+            print(
+                "invalid FundingReversion grid: --entry-threshold-grid must all be > 0",
+                file=sys.stderr,
+            )
+            return 2
+        if any(e < 0 for e in args.exit_threshold_grid):
+            print(
+                "invalid FundingReversion grid: --exit-threshold-grid must all be >= 0",
+                file=sys.stderr,
+            )
+            return 2
+        bad = [
+            (en, ex) for en in args.entry_threshold_grid for ex in args.exit_threshold_grid
+            if ex >= en
+        ]
+        if bad:
+            print(
+                f"invalid FundingReversion grid: exit_threshold must be strictly less "
+                f"than entry_threshold; offending pairs: {bad}",
                 file=sys.stderr,
             )
             return 2
