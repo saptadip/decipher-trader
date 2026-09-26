@@ -12,6 +12,92 @@ class invoked with different config values — no separate strategy files.
 
 ---
 
+## 2026-09-26 — Volatility filter (ATR% gate) on Momentum4h, 3-year retest
+
+**Verdict: hypothesis rejected. The ATR-percentage filter mechanically prunes
+trades in the expected direction, but no threshold beats the unfiltered
+baseline on total OOS PnL. Sharpe improves modestly at very-restrictive
+thresholds, but only by throwing away 60-70% of the trades — including winners
+in trending windows.**
+
+The strategy adds an optional ``vol_filter_min_atr_pct`` parameter that gates
+opens-from-flat when the ATR-over-close percentage over the last
+``atr_period`` bars is below the threshold. Exits and flips out of an existing
+position are always allowed so a low-vol regime never traps the strategy on
+the wrong side of an MA flip. ``atr_period=14`` by default; the filter is
+disabled when the threshold is unset.
+
+### Walk-forward sweep (fast=12, slow=24, train=6mo, test=3mo, step=3mo)
+
+Same 3-year window (2022-01 to 2025-01) and 10-window shape as PR #23, with
+``fast=12, slow=24`` pinned across all runs (so any effect is attributable to
+the filter, not to per-window param drift).
+
+| vol_filter_min_atr_pct | trades | OOS PnL (USDT) | positive wins | avg Sharpe | max drawdown (USDT) |
+|-----------------------:|-------:|---------------:|--------------:|-----------:|---------------------:|
+| off (baseline)         | 248    | **+80.50**     | 8/10          | 0.117      | 14.54                |
+| 0.5%                   | 248    | +80.80         | 8/10          | 0.119      | 14.54                |
+| 1.0%                   | 222    | +69.87         | 7/10          | 0.093      | 14.54                |
+| 1.5%                   | 151    | +56.08         | 8/10          | 0.136      | 17.59                |
+| 2.0%                   |  70    | +40.95         | 9/10          | 0.197      |  8.80                |
+
+Per-window OOS PnL (USDT):
+
+| window | off   | 0.5%  | 1.0%  | 1.5%  | 2.0%  |
+|--------|------:|------:|------:|------:|------:|
+| w0     | −2.07 | −2.07 | −2.07 | +0.62 | +1.57 |
+| w1     | −3.56 | −3.42 | −2.04 | −0.59 | +1.11 |
+| w2     | +7.55 | +7.55 | +6.64 | +2.13 | +3.10 |
+| w3     | +1.62 | +1.62 | +0.10 | +0.63 | +0.56 |
+| w4     | +0.99 | +1.14 | −1.31 | −0.16 | +0.38 |
+| w5     | +9.58 | +9.58 | +7.15 | +5.54 | +4.66 |
+| w6     | +27.62| +27.62| +26.06| +18.53| +8.94 |
+| w7     | +11.19| +11.19| +10.43| +12.70| −1.58 |
+| w8     | +18.67| +18.67| +18.47| +12.74| +6.53 |
+| w9     | +8.92 | +8.92 | +6.45 | +3.94 | +15.69|
+
+### Interpretation
+
+- **Mechanically the filter works.** Trade count declines monotonically from
+  248 (off) to 70 (2.0% threshold). A tighter gate lets fewer opens through,
+  as designed.
+- **Total PnL declines monotonically with threshold.** No threshold beats the
+  unfiltered baseline. The trimmed trades were, on net, positive contributors
+  — the filter cannot distinguish "chop that will lose" from "chop that will
+  turn into a rally we catch" ex ante.
+- **Sharpe improves modestly only at very-restrictive thresholds.** 2.0% lifts
+  average Sharpe from 0.117 to 0.197 (+68%) and pushes positive-window count
+  from 8/10 to 9/10, but at the cost of dropping trade count from 248 to 70.
+  Aggressive selectivity yields more consistent but much smaller edge.
+- **The direction of the effect matches PR #24.** Both parameter search and
+  volatility filtering trim trades without expanding edge. The bottleneck is
+  the underlying momentum signal on 4-hour BTCUSDT, not the parameterisation
+  around it.
+
+Baseline note: the +$80.50 unfiltered baseline here is higher than PR #23's
+per-window-winner result of +$54.43 because that run picked a different
+(fast, slow) per window and some non-(12, 24) choices lost. Fixing (12, 24)
+across all windows also beats the walk-forward winner selector for this
+strategy — a separate observation, out of scope for this filter test.
+
+### What this rules in and out
+
+- **Rules out:** ATR-percentage gating as a Sharpe-lifting overlay on
+  ToyMomentum-4h. No threshold combines edge preservation with variance
+  reduction well enough to justify shipping the filter as a live default.
+- **Rules in:** the ``vol_filter_min_atr_pct`` primitive itself. The plumbing
+  (config field, CLI flag on ``run_backtest.py`` / ``walk_forward.py``, grid
+  axis on ``param_search.py``, exit-safe gate semantics) is reusable for
+  future signal experiments and other strategies that consume ATR context.
+
+### Not promotable
+
+Same gates as PR #23 — Sharpe > 1, ≥ 500 trades, drawdown < 20%, positive
+after 5 bps taker fee. Best Sharpe here is 0.197 at 70 trades. Still not
+close.
+
+---
+
 ## 2026-09-26 — Binance BTCUSDT 4-hour, 2022-01-01 → 2025-01-01 (3 years)
 
 **Verdict: weak positive signal — first non-underwater strategy on the

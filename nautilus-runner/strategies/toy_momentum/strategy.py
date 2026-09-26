@@ -34,10 +34,15 @@ class ToyMomentumConfig(StrategyConfig):
         max_position: float,
         fast_period: int = 5,
         slow_period: int = 20,
+        atr_period: int = 14,
+        vol_filter_min_atr_pct: float | None = None,
         **_kwargs: Any,
     ) -> None:
         super().__init__()
         assert slow_period > fast_period, "slow_period must exceed fast_period"
+        assert atr_period >= 2, "atr_period must be >= 2"
+        if vol_filter_min_atr_pct is not None:
+            assert vol_filter_min_atr_pct >= 0.0, "vol_filter_min_atr_pct must be >= 0"
         self.instrument_id = instrument_id
         self.bar_type = bar_type
         self.trade_size = trade_size
@@ -46,6 +51,12 @@ class ToyMomentumConfig(StrategyConfig):
         self.max_position = max_position
         self.fast_period = fast_period
         self.slow_period = slow_period
+        self.atr_period = atr_period
+        # None disables the filter; otherwise it is the minimum ATR/close ratio
+        # (as a percentage of price) required to open a NEW position from flat.
+        # Exits toward flat are always allowed so the strategy is not trapped
+        # on the wrong side when volatility collapses.
+        self.vol_filter_min_atr_pct = vol_filter_min_atr_pct
         # Optional: DB row id for metrics emission; passed as **_kwargs by _build_node.
         self.strategy_db_id: int | None = _kwargs.get("strategy_db_id")
 
@@ -62,6 +73,11 @@ class ToyMomentum(Strategy):
         self._fast: deque[float] = deque(maxlen=config.fast_period)
         self._slow: deque[float] = deque(maxlen=config.slow_period)
         self._signed_position: float = 0.0
+
+        # Volatility filter state (simple-average ATR over the last atr_period TRs).
+        # Rolling window over True Range values; ATR = mean of the window when full.
+        self._tr_window: deque[float] = deque(maxlen=config.atr_period)
+        self._prev_close: float | None = None
 
         # Notional cap tracking
         self._last_close: float = 0.0
@@ -194,6 +210,13 @@ class ToyMomentum(Strategy):
         )
         self._signed_position += delta
 
+    def _atr_pct(self) -> float | None:
+        """Return ATR as a percentage of the last close, or None until warm."""
+        if len(self._tr_window) < self._config.atr_period or self._last_close == 0.0:
+            return None
+        atr = sum(self._tr_window) / len(self._tr_window)
+        return (atr / self._last_close) * 100.0
+
     def on_bar(self, bar: Bar) -> None:
         # UTC day boundary reset for daily loss tracking.
         today = datetime.now(timezone.utc).date()
@@ -201,10 +224,23 @@ class ToyMomentum(Strategy):
             self._realized_pnl_today = 0.0
             self._last_reset_utc_date = today
 
-        price = float(bar.close)
-        self._last_close = price
-        self._fast.append(price)
-        self._slow.append(price)
+        high = float(bar.high)
+        low = float(bar.low)
+        close = float(bar.close)
+
+        # True Range needs a prior close; seed on the first bar and skip TR update.
+        if self._prev_close is not None:
+            tr = max(
+                high - low,
+                abs(high - self._prev_close),
+                abs(low - self._prev_close),
+            )
+            self._tr_window.append(tr)
+        self._prev_close = close
+
+        self._last_close = close
+        self._fast.append(close)
+        self._slow.append(close)
         if len(self._slow) < self._config.slow_period:
             return
 
@@ -213,6 +249,19 @@ class ToyMomentum(Strategy):
 
         want_long = fast_ma > slow_ma
         trade_qty = float(self._config.trade_size)
+
+        # Volatility filter: only gate NEW positions opened from flat. Exits
+        # toward flat (reducing an existing position) are always allowed so a
+        # low-vol regime never traps the strategy on the wrong side of an MA
+        # flip. Flat tolerance is derived from trade_size so a future config
+        # with sub-satoshi sizing cannot silently misclassify positions as flat.
+        vol_min = self._config.vol_filter_min_atr_pct
+        is_flat = abs(self._signed_position) < 0.5 * float(self._config.trade_size)
+        if vol_min is not None and is_flat:
+            atr_pct = self._atr_pct()
+            if atr_pct is None or atr_pct < vol_min:
+                return
+
         if want_long and self._signed_position <= 0:
             self._submit_capped(OrderSide.BUY, +trade_qty)
         elif not want_long and self._signed_position >= 0:

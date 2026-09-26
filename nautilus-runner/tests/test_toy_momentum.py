@@ -924,3 +924,233 @@ def test_on_socket_state_skips_audit_when_no_audit_writer():
 
     mock_log.warning.assert_called_once()
     # No assertion needed for audit — test simply verifies no AttributeError raised.
+
+
+# ---------------------------------------------------------------------------
+# PR J: volatility filter (ATR% gate on open-from-flat)
+# ---------------------------------------------------------------------------
+
+
+def _make_strategy_with_vol_filter(
+    *,
+    vol_filter_min_atr_pct: float | None,
+    atr_period: int = 14,
+    fast_period: int = 5,
+    slow_period: int = 20,
+    trade_size: Decimal = Decimal("0.001"),
+    max_position: float = 10.0,
+) -> ToyMomentum:
+    instrument = InstrumentId.from_str("BTC-USD.HYPERLIQUID")
+    bar_type = BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL")
+    cfg = ToyMomentumConfig(
+        instrument_id=instrument,
+        bar_type=bar_type,
+        trade_size=trade_size,
+        max_notional=10_000_000.0,  # never trigger notional cap in these tests
+        max_daily_loss=1_000_000.0,  # never trigger daily-loss circuit
+        max_position=max_position,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        atr_period=atr_period,
+        vol_filter_min_atr_pct=vol_filter_min_atr_pct,
+    )
+    return ToyMomentum(cfg)
+
+
+def test_config_rejects_negative_vol_filter():
+    """Config assertion refuses a negative --vol-filter-min-atr-pct."""
+    instrument = InstrumentId.from_str("BTC-USD.HYPERLIQUID")
+    bar_type = BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL")
+    with pytest.raises(AssertionError):
+        ToyMomentumConfig(
+            instrument_id=instrument,
+            bar_type=bar_type,
+            trade_size=Decimal("0.001"),
+            max_notional=1000.0,
+            max_daily_loss=100.0,
+            max_position=1.0,
+            vol_filter_min_atr_pct=-0.1,
+        )
+
+
+def test_config_rejects_atr_period_below_two():
+    """Config assertion refuses atr_period < 2 (need 2 bars for a TR value)."""
+    instrument = InstrumentId.from_str("BTC-USD.HYPERLIQUID")
+    bar_type = BarType.from_str("BTC-USD.HYPERLIQUID-1-MINUTE-MID-INTERNAL")
+    with pytest.raises(AssertionError):
+        ToyMomentumConfig(
+            instrument_id=instrument,
+            bar_type=bar_type,
+            trade_size=Decimal("0.001"),
+            max_notional=1000.0,
+            max_daily_loss=100.0,
+            max_position=1.0,
+            atr_period=1,
+        )
+
+
+def test_atr_pct_matches_hand_computed_value():
+    """ATR% equals mean(TR) / last_close * 100 over the rolling window.
+
+    Uses distinct O/H/L/C so each of the three TR branches
+    (high-low, |high-prev_close|, |low-prev_close|) wins on a different bar,
+    catching a wrong branch or missing abs() that a flat-OHLC test would miss.
+    """
+    strategy = _make_strategy_with_vol_filter(
+        vol_filter_min_atr_pct=0.0,  # ATR still computed; filter disabled effectively
+        atr_period=3,
+    )
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    bar_type = strategy._config.bar_type
+
+    def _bar(open_p: float, high: float, low: float, close: float, ts: int) -> Bar:
+        return Bar(
+            bar_type,
+            Price.from_str(f"{open_p:.1f}"),
+            Price.from_str(f"{high:.1f}"),
+            Price.from_str(f"{low:.1f}"),
+            Price.from_str(f"{close:.1f}"),
+            Quantity.from_str("1.0"),
+            ts,
+            ts,
+        )
+
+    # Bar 0 seeds prev_close = 100. No TR appended for the first bar. Nautilus
+    # Bar enforces low <= open,close <= high on construction, so each bar
+    # observes those invariants.
+    # Bar 1: prev=100. O=100 H=110 L=95 C=100 → H-L=15, |H-prev|=10, |L-prev|=5. TR=15 (H-L wins).
+    # Bar 2: prev=100. O=112 H=115 L=112 C=113 → H-L=3, |H-prev|=15, |L-prev|=12. TR=15 (|H-prev| wins).
+    # Bar 3: prev=113. O=105 H=108 L=100 C=105 → H-L=8, |H-prev|=5, |L-prev|=13. TR=13 (|L-prev| wins).
+    # atr_period=3, TR window = [15, 15, 13] → mean=14.333..., last_close=105 → 13.650...%.
+    bars = [
+        _bar(100.0, 100.0, 100.0, 100.0, 0),
+        _bar(100.0, 110.0, 95.0, 100.0, 1),
+        _bar(112.0, 115.0, 112.0, 113.0, 2),
+        _bar(105.0, 108.0, 100.0, 105.0, 3),
+    ]
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        for bar in bars:
+            strategy.on_bar(bar)
+
+    expected_atr = (15.0 + 15.0 + 13.0) / 3.0
+    expected_pct = expected_atr / 105.0 * 100.0
+    assert strategy._atr_pct() == pytest.approx(expected_pct, rel=1e-6)
+
+
+def test_vol_filter_blocks_open_from_flat_when_atr_pct_low():
+    """Filter suppresses the bullish-crossover BUY when ATR% is below threshold."""
+    # Threshold 5% ATR is far above the 1% ATR produced by these bars → block.
+    strategy = _make_strategy_with_vol_filter(vol_filter_min_atr_pct=5.0, atr_period=14)
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    prices = (
+        [100.0 + i for i in range(25)]  # rising 100 -> 124 (bullish MA cross)
+        + [124.0 - i for i in range(25)]  # falling 124 -> 100
+    )
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        _feed_bars(strategy, prices)
+
+    assert mock_submit_order.call_count == 0, (
+        "vol filter should have blocked every open-from-flat entry;"
+        f" got {mock_submit_order.call_count} submits"
+    )
+
+
+def test_vol_filter_allows_open_from_flat_when_atr_pct_high():
+    """Filter permits the bullish-crossover BUY when ATR% exceeds threshold."""
+    # Threshold 0.1% is well below the ~1% ATR of these bars → allow.
+    strategy = _make_strategy_with_vol_filter(vol_filter_min_atr_pct=0.1, atr_period=14)
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    prices = [100.0 + i for i in range(25)]  # rising 100 -> 124
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        _feed_bars(strategy, prices)
+
+    assert mock_submit_order.call_count >= 1, (
+        "vol filter should have allowed the bullish-crossover BUY;"
+        f" got {mock_submit_order.call_count} submits"
+    )
+    first_side = mock_order_factory.market.call_args_list[0].kwargs["order_side"]
+    assert first_side == OrderSide.BUY
+
+
+def test_vol_filter_allows_exit_when_already_positioned():
+    """Filter never blocks an exit/flip — a long position can flip short in low vol."""
+    strategy = _make_strategy_with_vol_filter(vol_filter_min_atr_pct=5.0, atr_period=14)
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    # Seed a long position; bars below produce a bearish MA cross with tiny TR.
+    strategy._signed_position = 0.001
+
+    prices = (
+        [100.0 - i * 0.0001 for i in range(30)]  # slow decline: MA drifts bearish, TR tiny
+    )
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        _feed_bars(strategy, prices)
+
+    # At least one SELL fires (exit is not gated by the filter). It may be a
+    # single trade or a flip-through-flat; both are acceptable exits.
+    assert mock_submit_order.call_count >= 1, (
+        "vol filter must not block exits — expected at least one SELL against the long"
+    )
+    sides = [c.kwargs["order_side"] for c in mock_order_factory.market.call_args_list]
+    assert OrderSide.SELL in sides, f"expected a SELL to reduce the long; got {sides}"
+
+
+def test_vol_filter_blocks_until_atr_warm():
+    """Before the ATR window fills, the filter treats vol as unknown and blocks opens."""
+    # atr_period=14 needs 15 bars (first bar seeds prev_close). Feed only 14 bars —
+    # enough to prime slow MA (period=5, slow=8 to keep it under the bar count) and
+    # trigger a bullish cross, but not enough to fill the ATR window.
+    strategy = _make_strategy_with_vol_filter(
+        vol_filter_min_atr_pct=0.001,  # trivially small so warm ATR would allow trades
+        atr_period=14,
+        fast_period=2,
+        slow_period=4,
+    )
+    mock_log = MagicMock()
+    mock_order_factory = MagicMock()
+    mock_order_factory.market.return_value = MagicMock()
+    mock_submit_order = MagicMock()
+
+    prices = [100.0 + i for i in range(10)]  # slow-MA warm at bar 4; no warm ATR (< 15 bars)
+    with (
+        patch.object(ToyMomentum, "log", mock_log),
+        patch.object(ToyMomentum, "order_factory", mock_order_factory),
+        patch.object(ToyMomentum, "submit_order", mock_submit_order),
+    ):
+        _feed_bars(strategy, prices)
+
+    assert strategy._atr_pct() is None, "ATR should be unwarm with fewer bars than atr_period"
+    assert mock_submit_order.call_count == 0, (
+        "opens-from-flat must be blocked while ATR is unwarm (vol unknown)"
+    )
